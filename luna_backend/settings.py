@@ -27,6 +27,9 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+import os
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Application definition
 
@@ -40,6 +43,9 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'users',
+    'reminders',
+    'shopping',
+    'assistant',
 ]
 
 REST_FRAMEWORK = {
