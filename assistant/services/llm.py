@@ -1,10 +1,10 @@
 import google.generativeai as genai
 from django.conf import settings
 import json
+import os
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
-
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("models/gemini-2.5-flash")
 
 
 def analyze_intent(text):
@@ -30,10 +30,15 @@ No explanations. Only JSON.
 
     response = model.generate_content(prompt)
 
+    raw = response.text.strip()
+
+    # Remove markdown wrapping if present
+    cleaned = raw.replace("```json", "").replace("```", "").strip()
+
     try:
-        cleaned = response.text.strip()
         return json.loads(cleaned)
-    except Exception:
+    except Exception as e:
+        print("Gemini raw output:", raw)  # Debug
         return {
             "intent": "unknown",
             "task": text,

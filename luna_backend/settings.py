@@ -28,7 +28,9 @@ DEBUG = True
 ALLOWED_HOSTS = []
 
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Application definition
@@ -47,6 +49,9 @@ INSTALLED_APPS = [
     'shopping',
     'assistant',
 ]
+
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+MEDIA_URL = "/media/"
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -94,8 +99,12 @@ WSGI_APPLICATION = 'luna_backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'luna',
+        'USER': 'postgres',
+        'PASSWORD': 'ronak',
+        'HOST': '127.0.0.1', #can deploy it on aws
+        'PORT': '5432',
     }
 }
 

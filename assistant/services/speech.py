@@ -1,19 +1,33 @@
 from faster_whisper import WhisperModel
 import tempfile
+import os
 
-# Load once globally
-model = WhisperModel("base", compute_type="int8")
+# Load Whisper model once globally
+model = WhisperModel("base", device="cpu" ,compute_type="int8")
 
 def transcribe_audio(audio_file):
-    with tempfile.NamedTemporaryFile(delete=True, suffix=".wav") as temp:
-        for chunk in audio_file.chunks():
-            temp.write(chunk)
-        temp.flush()
+    """
+    Takes Django UploadedFile and returns transcript text.
+    Works safely on Windows.
+    """
+    # Create a temporary file safely for Windows
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    
+    try:
+        # Write uploaded chunks to temp file and close immediately
+        with os.fdopen(tmp_fd, "wb") as tmp:
+            for chunk in audio_file.chunks():
+                tmp.write(chunk)
 
-        segments, _ = model.transcribe(temp.name)
+        # Now the file is closed — safe for Whisper to read
+        segments, _ = model.transcribe(tmp_path)
 
-        text = ""
-        for segment in segments:
-            text += segment.text + " "
+        # Combine all segments into one string
+        text = " ".join([segment.text for segment in segments])
 
-    return text.strip()
+        return text.strip()
+
+    finally:
+        # Delete temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
