@@ -45,3 +45,26 @@ No explanations. Only JSON.
             "datetime": None,
             "items": []
         }
+
+def small_chatbot_response(transcript: str) -> str:
+    """
+    Handle casual conversation for unknown intents.
+    Returns a friendly response.
+    """
+    prompt = f"""
+You are a friendly AI assistant.
+Respond naturally and helpfully to the following user message:
+
+User: "{transcript}"
+
+If the message is casual (hello, thank you, how are you, etc.) respond naturally.
+If the message asks a task you cannot do, reply politely that you can't.
+Return only the assistant's text, no JSON.
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print("Error generating casual response:", e)
+        return "Sorry, I didn't understand that command."

@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 
 from .services.speech import transcribe_audio
 from .services.llm import analyze_intent
@@ -9,10 +10,11 @@ from .services.router import route_intent
 
 
 class VoiceCommandView(APIView):
+    parser_classes = [MultiPartParser]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        audio_file = request.FILES.get("audio")
+        audio_file = request.FILES.get("audio_file")
 
         if not audio_file:
             return Response(

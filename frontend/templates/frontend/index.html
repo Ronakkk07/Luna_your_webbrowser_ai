@@ -1,0 +1,65 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Luna WebBrowserAI</title>
+
+<link rel="stylesheet" href="{% static 'frontend/style.css' %}">
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1 class="title">Luna Voice Assistant</h1>
+
+<!-- LOGIN -->
+
+<div class="login-box">
+
+<input id="username" placeholder="Username">
+
+<input id="password" type="password" placeholder="Password">
+
+<button id="loginBtn">Login</button>
+
+<p id="loginStatus"></p>
+
+</div>
+
+
+<!-- MICROPHONE -->
+
+<div class="mic-wrapper">
+
+<div class="wave"></div>
+
+<button id="recordBtn" class="mic-btn">
+🎤
+</button>
+
+<p id="status">Click the microphone to start</p>
+
+</div>
+
+
+<!-- OUTPUT -->
+
+<div class="output">
+
+<h3>Transcript</h3>
+<p id="transcript"></p>
+
+<h3>Assistant</h3>
+<p id="response"></p>
+
+</div>
+
+</div>
+
+<script src="{% static 'frontend/script.js' %}"></script>
+
+</body>
+</html>
