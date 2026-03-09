@@ -2,7 +2,7 @@ from reminders.models import Reminder
 from shopping.models import ShoppingItem
 from django.utils import timezone
 from dateutil.parser import parse as parse_datetime
-
+from assistant.services.llm import small_chatbot_response
 def route_intent(data, user):
     intent = data.get("intent")
     task = (data.get("task") or "").lower()
