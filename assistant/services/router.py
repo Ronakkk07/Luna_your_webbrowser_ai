@@ -1,5 +1,6 @@
 from reminders.models import Reminder
 from shopping.models import ShoppingItem
+from reminders.tasks import trigger_reminder
 from django.utils import timezone
 from dateutil.parser import parse as parse_datetime
 from assistant.services.llm import small_chatbot_response
@@ -11,15 +12,38 @@ def route_intent(data, user):
     # ------------------- CREATE REMINDER -------------------
     if intent == "create_reminder":
         task_name = data.get("task")
+        if not task_name:
+            task_name = "General reminder"
+            
         dt_str = data.get("datetime")
         if dt_str:
             try:
-                dt = parse_datetime(dt_str)
+                dt_str_lower = dt_str.lower()
+                if "minute" in dt_str_lower:
+                    num = int(dt_str_lower.split("minute")[0])
+                    dt = timezone.now() + timezone.timedelta(minutes=num)
+                elif "hour" in dt_str_lower:
+                    num = int(dt_str_lower.split("hour")[0])
+                    dt = timezone.now() + timezone.timedelta(hours=num)
+                elif "day" in dt_str_lower:
+                    num = int(dt_str_lower.split("day")[0])
+                    dt = timezone.now() + timezone.timedelta(days=num)
+                else:
+                    dt_str = parse_datetime(dt_str.replace(".", ":"))
+                    dt = parse_datetime(dt_str)
             except:
                 dt = timezone.now()
         else:
             dt = timezone.now()
         reminder = Reminder.objects.create(user=user, task=task_name, date_time=dt)
+        # Calculate delay for Celery
+        delay = (dt - timezone.now()).total_seconds()
+
+        if delay > 0:
+            trigger_reminder.apply_async(
+                args=[reminder.id],
+                countdown=delay
+            )
         return f"Reminder created: {reminder.task} at {reminder.date_time.strftime('%Y-%m-%d %H:%M')}"
 
     # ------------------- ADD SHOPPING ITEMS -------------------

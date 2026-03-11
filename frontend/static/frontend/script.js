@@ -114,8 +114,9 @@ recordBtn.onclick = async () => {
             transcriptEl.innerText = data.transcript;
             responseEl.innerText = data.response;
             status.innerText = "Click microphone to speak";
-
-            speak(data.response);
+            if (data && data.response){
+                speak(data.response);
+            }
         } catch (error) {
             status.innerText = "Server error or unauthorized";
             console.error(error);
@@ -123,10 +124,39 @@ recordBtn.onclick = async () => {
     };
 };
 
+// ------------------- CHECK REMINDERS -------------------
+async function checkReminders() {
+    try {
+        const response = await fetchWithAuth("/api/reminders/due/");
+        const reminders = await response.json();
+
+        reminders.forEach(reminder => {
+            alert(`Reminder: ${reminder.task} at ${reminder.date_time}`);
+
+            // optional: speak the reminder
+            const speech = new SpeechSynthesisUtterance(reminder.task);
+            speech.rate = 1;
+            speech.pitch = 1;
+            speechSynthesis.speak(speech);
+        });
+    } catch (err) {
+        console.error("Error checking reminders:", err);
+    }
+}
+
+// start polling every 15 seconds
+setInterval(checkReminders, 15000);
+
 // ------------------- TEXT TO SPEECH -------------------
 function speak(text) {
-    const speech = new SpeechSynthesisUtterance(text);
-    speech.rate = 1;
-    speech.pitch = 1;
-    speechSynthesis.speak(text);
+
+    if (!text || typeof text !== "string") return;
+
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    utterance.rate = 1;
+    utterance.pitch = 1;
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
 }
