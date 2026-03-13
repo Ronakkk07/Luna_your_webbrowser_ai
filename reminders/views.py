@@ -20,13 +20,20 @@ class ReminderViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='due')
     def due_reminders(self, request):
         now = timezone.now()
-        reminders = self.get_queryset().filter(date_time__lte=now, notified=False)
-
-        # mark them as notified
-        reminders.update(notified=True)
+        reminders = (
+            self.get_queryset()
+            .filter(date_time__lte=now, notified=False)
+            .order_by("date_time")
+        )
 
         data = [
-            {"id": r.id, "task": r.task, "date_time": r.date_time.strftime("%Y-%m-%d %H:%M")}
+            {
+                "id": r.id,
+                "task": r.task,
+                "date_time": r.date_time.strftime("%Y-%m-%d %H:%M"),
+            }
             for r in reminders
         ]
+        reminders.update(notified=True)
+
         return Response(data)

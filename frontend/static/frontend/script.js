@@ -1,5 +1,6 @@
 let recorder;
 let audioChunks = [];
+let reminderSeenIds = new Set();
 
 // Tokens
 let tokenAccess = localStorage.getItem("jwt_access");
@@ -14,6 +15,12 @@ const loginBtn = document.getElementById("loginBtn");
 const usernameInput = document.getElementById("username");
 const passwordInput = document.getElementById("password");
 const loginStatus = document.getElementById("loginStatus");
+
+// Wake-word state
+const WAKE_WORD = "luna";
+let wakeRecognition;
+let wakeDetectionActive = false;
+
 
 // ------------------- LOGIN -------------------
 loginBtn.onclick = async () => {
@@ -36,6 +43,7 @@ loginBtn.onclick = async () => {
         localStorage.setItem("jwt_refresh", tokenRefresh);
 
         loginStatus.innerText = "Login successful";
+        status.innerText = `Logged in. Say \"${WAKE_WORD}\" to start listening.`;
     } else {
         loginStatus.innerText = "Login failed";
     }
@@ -43,9 +51,11 @@ loginBtn.onclick = async () => {
 
 // ------------------- FETCH WITH JWT -------------------
 async function fetchWithAuth(url, options = {}) {
-    let token = tokenAccess;
+     if (!tokenAccess) {
+        throw new Error("Login required");
+    }
     options.headers = options.headers || {};
-    options.headers["Authorization"] = "Bearer " + token;
+    options.headers["Authorization"] = "Bearer " + tokenAccess;
 
     let response = await fetch(url, options);
 
@@ -59,6 +69,9 @@ async function fetchWithAuth(url, options = {}) {
             body: JSON.stringify({ refresh: tokenRefresh })
         });
         const refreshData = await refreshResp.json();
+        if (!refreshData.access) {
+            throw new Error("Session expired. Please login again.");
+        }
         tokenAccess = refreshData.access;
         localStorage.setItem("jwt_access", tokenAccess);
 
@@ -69,6 +82,26 @@ async function fetchWithAuth(url, options = {}) {
 
     return response;
 }
+
+async function processVoiceBlob(blob) {
+    const formData = new FormData();
+    formData.append("audio_file", blob, "voice.wav");
+
+    const response = await fetchWithAuth("/api/assistant/voice/", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await response.json();
+
+    transcriptEl.innerText = data.transcript || "";
+    responseEl.innerText = data.response || "";
+
+    if (data && data.response) {
+        speak(data.response);
+    }
+}
+
 
 // ------------------- RECORD VOICE -------------------
 recordBtn.onclick = async () => {
@@ -91,7 +124,7 @@ recordBtn.onclick = async () => {
     recordBtn.classList.add("recording");
     status.innerText = "Listening...";
 
-    recorder.ondataavailable = e => {
+    recorder.ondataavailable = (e) => {
         audioChunks.push(e.data);
     };
 
@@ -99,24 +132,26 @@ recordBtn.onclick = async () => {
         const blob = new Blob(audioChunks, { type: "audio/wav" });
         audioChunks = [];
 
-        const formData = new FormData();
-        formData.append("audio_file", blob, "voice.wav");
+        // const formData = new FormData();
+        // formData.append("audio_file", blob, "voice.wav");
 
         try {
-            const response = await fetchWithAuth("/api/assistant/voice/", {
-                method: "POST",
-                body: formData
-            });
+            // const response = await fetchWithAuth("/api/assistant/voice/", {
+            //     method: "POST",
+            //     body: formData
+            // });
 
-            const data = await response.json();
-            console.log(data);
+            // const data = await response.json();
+            // console.log(data);
 
-            transcriptEl.innerText = data.transcript;
-            responseEl.innerText = data.response;
-            status.innerText = "Click microphone to speak";
-            if (data && data.response){
-                speak(data.response);
-            }
+            // transcriptEl.innerText = data.transcript;
+            // responseEl.innerText = data.response;
+            // status.innerText = "Click microphone to speak";
+            // if (data && data.response){
+            //     speak(data.response);
+            // }
+            await processVoiceBlob(blob);
+            status.innerText = `Say \"${WAKE_WORD}\" or click microphone to speak again.`;
         } catch (error) {
             status.innerText = "Server error or unauthorized";
             console.error(error);
@@ -124,13 +159,93 @@ recordBtn.onclick = async () => {
     };
 };
 
+// ------------------- WAKE WORD: "Luna" -------------------
+async function recordSingleCommand(seconds = 5) {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const wakeRecorder = new MediaRecorder(stream);
+    const chunks = [];
+
+    return new Promise((resolve) => {
+        wakeRecorder.ondataavailable = (event) => chunks.push(event.data);
+        wakeRecorder.onstop = () => {
+            stream.getTracks().forEach((track) => track.stop());
+            resolve(new Blob(chunks, { type: "audio/wav" }));
+        };
+
+        wakeRecorder.start();
+        setTimeout(() => wakeRecorder.stop(), seconds * 1000);
+    });
+}
+
+function initWakeWordListener() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!Recognition) {
+        status.innerText = "Wake word is not supported in this browser. Use the microphone button.";
+        return;
+    }
+
+    wakeRecognition = new Recognition();
+    wakeRecognition.continuous = true;
+    wakeRecognition.interimResults = false;
+    wakeRecognition.lang = "en-US";
+
+    wakeRecognition.onresult = async (event) => {
+        const result = event.results[event.results.length - 1];
+        const transcript = (result[0].transcript || "").trim().toLowerCase();
+
+        if (!transcript.startsWith(WAKE_WORD)) {
+            return;
+        }
+
+        if (!tokenAccess) {
+            status.innerText = "Wake word detected, but please login first.";
+            return;
+        }
+
+        status.innerText = "Wake word detected. Listening for your command...";
+
+        try {
+            const commandBlob = await recordSingleCommand(6);
+            status.innerText = "Processing wake-word command...";
+            await processVoiceBlob(commandBlob);
+            status.innerText = `Done. Say "${WAKE_WORD}" for the next command.`;
+        } catch (error) {
+            status.innerText = "Could not process wake-word command.";
+            console.error(error);
+        }
+    };
+
+    wakeRecognition.onerror = (event) => {
+        console.error("Wake word error:", event.error);
+        status.innerText = "Wake-word listener had an issue, restarting...";
+    };
+
+    wakeRecognition.onend = () => {
+        if (wakeDetectionActive) {
+            wakeRecognition.start();
+        }
+    };
+
+    wakeDetectionActive = true;
+    wakeRecognition.start();
+}
+
 // ------------------- CHECK REMINDERS -------------------
 async function checkReminders() {
+    if (!tokenAccess) return;
     try {
         const response = await fetchWithAuth("/api/reminders/due/");
+         if (!response.ok) {
+            throw new Error(`Reminder poll failed: ${response.status}`);
+        }
         const reminders = await response.json();
 
-        reminders.forEach(reminder => {
+        reminders.forEach((reminder) => {
+            if (reminderSeenIds.has(reminder.id)) {
+                return;
+            }
+            reminderSeenIds.add(reminder.id);
             alert(`Reminder: ${reminder.task} at ${reminder.date_time}`);
 
             // optional: speak the reminder
@@ -143,13 +258,14 @@ async function checkReminders() {
         console.error("Error checking reminders:", err);
     }
 }
+initWakeWordListener();
+checkReminders();
 
 // start polling every 15 seconds
 setInterval(checkReminders, 15000);
 
 // ------------------- TEXT TO SPEECH -------------------
 function speak(text) {
-
     if (!text || typeof text !== "string") return;
 
     const utterance = new SpeechSynthesisUtterance(text);
@@ -159,4 +275,5 @@ function speak(text) {
 
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
+
 }
