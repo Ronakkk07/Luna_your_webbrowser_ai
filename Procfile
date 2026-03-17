@@ -1,0 +1,1 @@
+web: gunicorn luna_backend.wsgi:application
