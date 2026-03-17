@@ -20,12 +20,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-7$y7%dqk8gm)_lv02l+qkmp^dpbv-=q5r9(z)slf&94ubfw7b='
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 import os
 from dotenv import load_dotenv
@@ -116,7 +116,8 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'luna',
         'USER': 'postgres',
-        'PASSWORD': 'ronak',
+        # 'PASSWORD': 'ronak',
+        'PASSWORD': os.get_env("POSTGRES_PASSWORD"),
         'HOST': '127.0.0.1', #can deploy it on aws
         'PORT': '5432',
     }
