@@ -23,9 +23,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-7$y7%dqk8gm)_lv02l+qkmp^dpbv-=q5r9(z)slf&94ubfw7b=")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
-ALLOWED_HOSTS = ["http://lunaenv.eba-vqkbtfmm.us-east-1.elasticbeanstalk.com/"]
+ALLOWED_HOSTS = ["31ada3e8611d4e04b2dcd8532c5c4c6b.vfs.cloud9.us-east-1.amazonaws.com",
+    "localhost",
+    "127.0.0.1",
+    ]
 
 import os
 from dotenv import load_dotenv
@@ -55,7 +58,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 MEDIA_URL = "/media/"
 
 STATIC_URL = "/static/"
-STATICFILES_DIRS = []
+STATICFILES_DIRS = [BASE_DIR / "frontend" / "static",]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
@@ -111,15 +114,22 @@ WSGI_APPLICATION = 'luna_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'luna',
+#         'USER': 'postgres',
+#         # 'PASSWORD': 'ronak',
+#         'PASSWORD': os.getenv("POSTGRES_PASSWORD"),
+#         'HOST': '127.0.0.1', #can deploy it on aws
+#         'PORT': '5432',
+#     }
+# }
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'luna',
-        'USER': 'postgres',
-        # 'PASSWORD': 'ronak',
-        'PASSWORD': os.getenv("POSTGRES_PASSWORD"),
-        'HOST': '127.0.0.1', #can deploy it on aws
-        'PORT': '5432',
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / "db.sqlite3",
     }
 }
 
@@ -157,5 +167,3 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
-
-STATIC_URL = 'static/'
