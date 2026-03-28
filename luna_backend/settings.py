@@ -16,6 +16,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -30,7 +37,6 @@ ALLOWED_HOSTS = ["31ada3e8611d4e04b2dcd8532c5c4c6b.vfs.cloud9.us-east-1.amazonaw
     "127.0.0.1",
     ]
 
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -47,6 +53,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
+    'django_celery_results',
     'users',
     'reminders',
     'shopping',
@@ -61,11 +68,19 @@ STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "frontend" / "static",]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 
-CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "django-db")
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "300"))
+CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
+CELERY_TASK_STORE_EAGER_RESULT = env_bool("CELERY_TASK_STORE_EAGER_RESULT", False)
+CITY_INFO_API_URL = os.getenv(
+    "CITY_INFO_API_URL",
+    "https://mec2nt9daf.execute-api.us-east-1.amazonaws.com/default/GeoCodingCityInfo",
+)
 
 CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True

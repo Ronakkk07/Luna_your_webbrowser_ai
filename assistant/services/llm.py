@@ -19,11 +19,17 @@ Command:
 Return ONLY valid JSON in this exact format:
 
 {{
-  "intent": "create_reminder | add_shopping | summarize | unknown",
+  "intent": "create_reminder | add_shopping | summarize | get_city_info | unknown",
   "task": "string or null",
   "datetime": "string or null",
-  "items": ["item1", "item2"]
+  "items": ["item1", "item2"],
+  "city": "string or null",
+  "city_field": "population | timezone | country | coordinates | languages | currencies | formatted_address | country_code | null"
 }}
+
+Use `get_city_info` when the user asks about a city and the answer could come from geocoding/city metadata.
+Set `city` to the city name when present.
+Set `city_field` only when the user asks for one specific piece of city data, otherwise null.
 
 No explanations. Only JSON.
 """
@@ -43,7 +49,9 @@ No explanations. Only JSON.
             "intent": "unknown",
             "task": text,
             "datetime": None,
-            "items": []
+            "items": [],
+            "city": None,
+            "city_field": None,
         }
 
 def small_chatbot_response(transcript: str) -> str:
