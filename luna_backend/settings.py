@@ -139,7 +139,10 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
-
+CSRF_TRUSTED_ORIGINS = [
+    "https://lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
+    "http://lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
+]
 ROOT_URLCONF = 'luna_backend.urls'
 
 TEMPLATES = [
