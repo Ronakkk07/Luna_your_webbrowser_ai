@@ -36,6 +36,7 @@ ALLOWED_HOSTS = ["31ada3e8611d4e04b2dcd8532c5c4c6b.vfs.cloud9.us-east-1.amazonaw
     "lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
     "localhost",
     "127.0.0.1",
+    ".elasticbeanstalk.com",
     ]
 import ssl
 from dotenv import load_dotenv
