@@ -3,7 +3,7 @@ branch-defaults:
     environment: lunaenv
     group_suffix: null
 global:
-  application_name: luna_backend
+  application_name: luna-webbrowser-ai
   branch: null
   default_ec2_keyname: null
   default_platform: Python 3.11
