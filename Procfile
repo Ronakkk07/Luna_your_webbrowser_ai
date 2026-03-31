@@ -1,1 +1,1 @@
-web: gunicorn --bind :8000 --timeout 120 luna_backend.wsgi:application
+web: gunicorn --bind :8000 --timeout 120 --workers 2 --threads 2 luna_backend.wsgi:application
