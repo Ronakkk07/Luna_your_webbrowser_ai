@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luna</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="orb" id="orb"></span>
+      <h1>Luna</h1>
+    </div>
+    <button id="settingsToggle" class="icon-btn" title="Settings">⚙</button>
+  </header>
+
+  <!-- Settings -->
+  <section id="settings" class="panel hidden">
+    <label class="field">
+      <span>Server URL</span>
+      <input id="baseUrl" type="text" placeholder="http://127.0.0.1:8000" />
+    </label>
+    <label class="field">
+      <span>Voice</span>
+      <select id="voiceSelect"></select>
+    </label>
+    <label class="field">
+      <span>Speed <em id="rateVal" class="muted"></em></span>
+      <input id="voiceRate" type="range" min="0.6" max="1.4" step="0.05" value="1" />
+    </label>
+    <label class="field">
+      <span>Pitch <em id="pitchVal" class="muted"></em></span>
+      <input id="voicePitch" type="range" min="0.5" max="1.5" step="0.05" value="0.9" />
+    </label>
+    <div class="row">
+      <button id="testVoice" class="btn ghost">Test voice</button>
+      <button id="saveSettings" class="btn">Save</button>
+    </div>
+  </section>
+
+  <!-- Login -->
+  <section id="loginPanel" class="panel">
+    <label class="field">
+      <span>Username</span>
+      <input id="username" type="text" autocomplete="username" />
+    </label>
+    <label class="field">
+      <span>Password</span>
+      <input id="password" type="password" autocomplete="current-password" />
+    </label>
+    <button id="loginBtn" class="btn">Log in</button>
+    <p id="loginStatus" class="muted"></p>
+  </section>
+
+  <!-- Assistant -->
+  <section id="assistantPanel" class="panel hidden">
+    <div class="mic-area">
+      <button id="micBtn" class="mic-btn" title="Tap to talk">🎤</button>
+      <p id="status" class="status">Tap the mic or say “Luna …”.</p>
+      <div class="controls">
+        <label class="wake-toggle">
+          <input type="checkbox" id="wakeToggle" />
+          <span>Always listen (offline) for “Luna”</span>
+        </label>
+        <button id="stopBtn" class="btn ghost small">Stop talking</button>
+      </div>
+    </div>
+
+    <div id="log" class="log"></div>
+
+    <button id="logoutBtn" class="btn ghost">Log out</button>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

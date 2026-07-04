@@ -15,11 +15,12 @@ def process_voice_command_task(audio_path, user_id):
     try:
         transcript = transcribe_audio_path(audio_path)
         intent_data = analyze_intent(transcript)
-        response_text = route_intent(intent_data, user)
+        plan = route_intent(intent_data, user)
         return {
             "transcript": transcript,
             "intent": intent_data,
-            "response": response_text,
+            "speak": plan.get("speak", ""),
+            "actions": plan.get("actions", []),
         }
     finally:
         if os.path.exists(audio_path):

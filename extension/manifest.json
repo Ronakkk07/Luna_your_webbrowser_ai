@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Luna Browser Assistant",
+  "version": "0.1.0",
+  "description": "Alexa-like voice assistant that lives in your browser: reminders, news, time, and hands-free tab control.",
+  "permissions": ["tabs", "scripting", "storage", "sidePanel", "search", "offscreen", "tts"],
+  "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["models/*", "vendor/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Luna"
+  }
+}

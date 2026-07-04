@@ -32,6 +32,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-7$y7%dqk8gm)_lv02l+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
+<<<<<<< HEAD
 ALLOWED_HOSTS = ["31ada3e8611d4e04b2dcd8532c5c4c6b.vfs.cloud9.us-east-1.amazonaws.com",
     "lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
     "localhost",
@@ -49,6 +50,13 @@ try:
 except Exception:
     pass
 import ssl
+=======
+ALLOWED_HOSTS = os.getenv(
+    "DJANGO_ALLOWED_HOSTS",
+    "localhost,127.0.0.1",
+).split(",")
+
+>>>>>>> 381fc78a (able to use mic when the panel is off, and testing done on extension)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -118,14 +126,31 @@ CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
 CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "300"))
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
 CELERY_TASK_STORE_EAGER_RESULT = env_bool("CELERY_TASK_STORE_EAGER_RESULT", False)
-CITY_INFO_API_URL = os.getenv(
-    "CITY_INFO_API_URL",
-    "https://mec2nt9daf.execute-api.us-east-1.amazonaws.com/default/GeoCodingCityInfo",
+# NOTE: The original City Info API was an AWS Lambda that has been decommissioned
+# (the lab expired). It is left configurable so an alternative can be plugged in,
+# but the assistant no longer depends on it. Leave empty to disable city lookups.
+CITY_INFO_API_URL = os.getenv("CITY_INFO_API_URL", "")
+
+# News: Google News RSS needs no API key. {query} is URL-encoded search terms.
+NEWS_RSS_URL = os.getenv(
+    "NEWS_RSS_URL",
+    "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
 )
+<<<<<<< HEAD
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_RESULT_EXTENDED = True
+=======
+NEWS_TOP_RSS_URL = os.getenv(
+    "NEWS_TOP_RSS_URL",
+    "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+)
+
+# Timezone used when the assistant reports the current time to the user.
+ASSISTANT_TIMEZONE = os.getenv("ASSISTANT_TIMEZONE", "UTC")
+
+>>>>>>> 381fc78a (able to use mic when the panel is off, and testing done on extension)
 CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 

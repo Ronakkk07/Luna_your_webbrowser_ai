@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luna — Microphone access</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+  <style>
+    body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+    .card { max-width: 420px; padding: 28px; text-align: center; }
+    .card h1 { margin-top: 0; }
+    .card p { color: var(--muted); line-height: 1.5; }
+    #result { margin-top: 14px; font-weight: 600; }
+    .ok { color: #6cff9a; }
+    .err { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="card panel">
+    <div class="brand" style="justify-content:center;margin-bottom:8px;">
+      <span class="orb"></span><h1>Luna</h1>
+    </div>
+    <p>Luna needs microphone access to hear your voice commands. Click below and
+    choose <strong>Allow</strong> when your browser asks.</p>
+    <button id="grantBtn" class="btn">Enable microphone</button>
+    <p id="result"></p>
+  </div>
+  <script src="permission.js"></script>
+</body>
+</html>

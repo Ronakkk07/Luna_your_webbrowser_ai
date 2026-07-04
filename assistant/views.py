@@ -4,18 +4,65 @@ from uuid import uuid4
 from celery.result import AsyncResult
 from django.conf import settings
 from rest_framework import status
-from rest_framework.parsers import MultiPartParser
+from rest_framework.parsers import JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .services.llm import analyze_intent
+from .services.llm import analyze_intent, summarize_page_text
 from .services.router import route_intent
 from .services.speech import transcribe_audio
 from .tasks import process_voice_command_task
 
 
+def _run_command(text, user):
+    """Shared pipeline: text -> intent -> action plan."""
+    intent_data = analyze_intent(text)
+    plan = route_intent(intent_data, user)
+    return {
+        "transcript": text,
+        "intent": intent_data,
+        "speak": plan.get("speak", ""),
+        "actions": plan.get("actions", []),
+    }
+
+
+class TextCommandView(APIView):
+    """Primary endpoint for the extension: JSON {text} -> {speak, actions}.
+
+    The extension transcribes speech locally with the Web Speech API and sends
+    the text here, so no audio upload is needed.
+    """
+
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        text = (request.data.get("text") or "").strip()
+        if not text:
+            return Response(
+                {"error": "No text provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(_run_command(text, request.user))
+
+
+class PageSummaryView(APIView):
+    """Summarize page text extracted by the extension: JSON {text, title}."""
+
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        text = request.data.get("text") or ""
+        title = request.data.get("title") or ""
+        summary = summarize_page_text(text, title)
+        return Response({"speak": summary})
+
+
 class VoiceCommandView(APIView):
+    """Audio-upload fallback: transcribes with Whisper server-side."""
+
     parser_classes = [MultiPartParser]
     permission_classes = [IsAuthenticated]
 
@@ -29,16 +76,7 @@ class VoiceCommandView(APIView):
             )
 
         transcript = transcribe_audio(audio_file)
-        intent_data = analyze_intent(transcript)
-        result = route_intent(intent_data, request.user)
-
-        return Response(
-            {
-                "transcript": transcript,
-                "intent": intent_data,
-                "response": result,
-            }
-        )
+        return Response(_run_command(transcript, request.user))
 
 
 class AsyncVoiceCommandView(APIView):

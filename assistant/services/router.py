@@ -1,178 +1,197 @@
+"""Turn a structured intent into an action plan for the browser extension.
+
+Every handler returns a dict of the shape::
+
+    {"speak": "<text Luna says>", "actions": [<browser action>, ...]}
+
+Browser actions are executed by the extension's background service worker.
+Supported action types (see extension/background.js):
+
+    {"type": "open_tab",       "url": "https://..."}
+    {"type": "search_web",     "query": "...", "url": "<fallback search url>"}
+    {"type": "switch_tab",     "hint": "gmail"}
+    {"type": "close_tab",      "hint": "youtube" | null}   # null = current tab
+    {"type": "list_tabs"}
+    {"type": "summarize_page"}
+"""
+from urllib.parse import quote_plus
+
+from django.conf import settings
+from django.utils import timezone
+
+try:  # zoneinfo is stdlib on py3.9+
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
 from assistant.services.llm import small_chatbot_response
+from assistant.services.news import NewsLookupError, fetch_headlines, summarize_headlines
 from reminders.tasks import build_reminder_datetime, create_reminder_for_user
-from shopping.services import fetch_city_info
 from shopping.tasks import add_shopping_items_for_user
 
 
-def _format_city_info_response(city_info, requested_field=None):
-    city_name = city_info.get("city") or "That city"
-    field = (requested_field or "").strip().lower()
+def _plan(speak, actions=None):
+    return {"speak": speak, "actions": actions or []}
 
-    if field == "population":
-        population = city_info.get("population")
-        if population is not None:
-            return f"The population of {city_name} is {population:,}."
-    elif field == "timezone":
-        timezone = city_info.get("timezone") or {}
-        timezone_name = timezone.get("name")
-        offset = timezone.get("offset_string")
-        if timezone_name and offset:
-            return f"{city_name} is in the {timezone_name} timezone with offset {offset}."
-        if timezone_name:
-            return f"{city_name} is in the {timezone_name} timezone."
-    elif field == "country":
-        country = city_info.get("country")
-        if country:
-            return f"{city_name} is in {country}."
-    elif field == "coordinates":
-        latitude = city_info.get("latitude")
-        longitude = city_info.get("longitude")
-        if latitude is not None and longitude is not None:
-            return f"{city_name} is located at latitude {latitude} and longitude {longitude}."
-    elif field == "languages":
-        languages = city_info.get("languages") or []
-        if languages:
-            return f"Languages spoken in {city_name} include {', '.join(languages)}."
-    elif field == "currencies":
-        currencies = city_info.get("currencies") or []
-        if currencies:
-            currency_names = [
-                currency.get("name") or currency.get("code")
-                for currency in currencies
-                if currency.get("name") or currency.get("code")
-            ]
-            if currency_names:
-                return f"The currency used in {city_name} is {', '.join(currency_names)}."
-    elif field == "formatted_address":
-        formatted_address = city_info.get("formatted_address")
-        if formatted_address:
-            return f"The formatted address for {city_name} is {formatted_address}."
-    elif field == "country_code":
-        country_code = city_info.get("country_code")
-        if country_code:
-            return f"The country code for {city_name} is {country_code}."
 
-    country = city_info.get("country")
-    country_code = city_info.get("country_code")
-    population = city_info.get("population")
-    formatted_address = city_info.get("formatted_address")
-    latitude = city_info.get("latitude")
-    longitude = city_info.get("longitude")
-    timezone = city_info.get("timezone") or {}
-    languages = city_info.get("languages") or []
-    currencies = city_info.get("currencies") or []
+def _search_url(query):
+    return f"https://www.google.com/search?q={quote_plus(query)}"
 
-    intro_sentence = None
-    if country:
-        intro_sentence = f"{city_name} is a city in {country}"
-    else:
-        intro_sentence = f"{city_name} is a city"
 
-    detail_bits = []
-    if country_code:
-        detail_bits.append(f"country code {country_code}")
-    if population is not None:
-        detail_bits.append(f"a population of {population:,}")
+def _handle_create_reminder(data, user):
+    task_name = data.get("task") or "General reminder"
+    dt = build_reminder_datetime(data.get("datetime"))
+    reminder = create_reminder_for_user(user=user, task_name=task_name, dt=dt)
+    return _plan(
+        f"Reminder set: {reminder.task} at "
+        f"{reminder.date_time.strftime('%A %I:%M %p')}."
+    )
 
-    paragraphs = []
 
-    if detail_bits:
-        intro_sentence += ", with " + " and ".join(detail_bits)
-    paragraphs.append(intro_sentence + ".")
+def _handle_add_shopping(data, user):
+    added_items = add_shopping_items_for_user(user, data.get("items", []))
+    if added_items:
+        return _plan(f"Added to your shopping list: {', '.join(added_items)}.")
+    return _plan("Those items are already on your shopping list.")
 
-    location_parts = []
-    if formatted_address:
-        location_parts.append(f"It is listed as {formatted_address}")
-    if latitude is not None and longitude is not None:
-        location_parts.append(f"its coordinates are {latitude}, {longitude}")
-    if timezone.get("name"):
-        timezone_text = f"the timezone is {timezone['name']}"
-        if timezone.get("offset_string"):
-            timezone_text += f" ({timezone['offset_string']})"
-        location_parts.append(timezone_text)
-    if location_parts:
-        paragraphs.append(". ".join(location_parts) + ".")
 
-    culture_parts = []
-    if languages:
-        culture_parts.append(f"Languages spoken there include {', '.join(languages)}")
-    if currencies:
-        currency_descriptions = []
-        for currency in currencies:
-            code = currency.get("code")
-            name = currency.get("name")
-            symbol = currency.get("symbol")
-            if code and name and symbol:
-                currency_descriptions.append(f"{name} ({code}, symbol {symbol})")
-            elif code and name:
-                currency_descriptions.append(f"{name} ({code})")
-            elif name or code:
-                currency_descriptions.append(name or code)
-        if currency_descriptions:
-            culture_parts.append(
-                "The currency used is " + ", ".join(currency_descriptions)
-            )
-    if culture_parts:
-        paragraphs.append(". ".join(culture_parts) + ".")
+def _handle_list_shopping(user):
+    items = user.shopping_items.all()
+    if items.exists():
+        listed = ", ".join(f"{item.item_name} ({item.quantity})" for item in items)
+        return _plan(f"Your shopping list: {listed}.")
+    return _plan("Your shopping list is empty.")
 
-    if paragraphs:
-        return "\n\n".join(paragraphs)
 
-    return f"I found city information for {city_name}."
+def _handle_list_reminders(user):
+    reminders = user.reminders.all()
+    if reminders.exists():
+        listed = ", ".join(
+            f"{r.task} at {r.date_time.strftime('%A %I:%M %p')}" for r in reminders
+        )
+        return _plan(f"Your reminders: {listed}.")
+    return _plan("You have no reminders.")
+
+
+def _handle_open_tab(data):
+    url = (data.get("url") or "").strip()
+    if url:
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return _plan(f"Opening {url}.", [{"type": "open_tab", "url": url}])
+
+    query = (data.get("query") or data.get("task") or "").strip()
+    if query:
+        return _plan(
+            f"Searching for {query}.",
+            [{"type": "search_web", "query": query, "url": _search_url(query)}],
+        )
+    return _plan("Which site would you like me to open?")
+
+
+def _handle_play_youtube(data):
+    query = (data.get("query") or data.get("task") or "").strip()
+    if not query:
+        return _plan(
+            "Opening YouTube.",
+            [{"type": "open_tab", "url": "https://www.youtube.com"}],
+        )
+    url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+    return _plan(
+        f"Playing {query} on YouTube.",
+        [{"type": "youtube_play", "query": query, "url": url}],
+    )
+
+
+def _handle_search_web(data):
+    query = (data.get("query") or data.get("task") or "").strip()
+    if not query:
+        return _plan("What would you like me to search for?")
+    return _plan(
+        f"Searching the web for {query}.",
+        [{"type": "search_web", "query": query, "url": _search_url(query)}],
+    )
+
+
+def _handle_switch_tab(data):
+    hint = (data.get("tab_hint") or data.get("query") or "").strip()
+    if not hint:
+        return _plan("Which tab should I switch to?")
+    return _plan(f"Switching to the {hint} tab.", [{"type": "switch_tab", "hint": hint}])
+
+
+def _handle_close_tab(data):
+    hint = (data.get("tab_hint") or "").strip() or None
+    speak = f"Closing the {hint} tab." if hint else "Closing this tab."
+    return _plan(speak, [{"type": "close_tab", "hint": hint}])
+
+
+def _handle_get_time():
+    tz = None
+    if ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(settings.ASSISTANT_TIMEZONE)
+        except Exception:
+            tz = None
+    now = timezone.localtime(timezone.now(), tz) if tz else timezone.now()
+    return _plan(now.strftime("It's %I:%M %p on %A, %B %d.").replace(" 0", " "))
+
+
+def _handle_get_news(data):
+    query = (data.get("query") or "").strip() or None
+    try:
+        headlines = fetch_headlines(query=query, limit=5)
+    except NewsLookupError:
+        return _plan("I couldn't reach the news service right now.")
+    return _plan(summarize_headlines(headlines, query=query))
 
 
 def route_intent(data, user):
+    """Dispatch a structured intent to a handler, returning an action plan dict."""
     intent = data.get("intent")
     task = (data.get("task") or "").lower()
     transcript = data.get("task")
 
     if intent == "create_reminder":
-        task_name = data.get("task") or "General reminder"
-        dt = build_reminder_datetime(data.get("datetime"))
-        reminder = create_reminder_for_user(user=user, task_name=task_name, dt=dt)
-        return (
-            f"Reminder created: {reminder.task} at "
-            f"{reminder.date_time.strftime('%Y-%m-%d %H:%M')}"
-        )
+        return _handle_create_reminder(data, user)
 
     if intent == "add_shopping":
-        added_items = add_shopping_items_for_user(user, data.get("items", []))
-        if added_items:
-            return f"Items added to shopping list: {', '.join(added_items)}"
-        return "No new items added (already in list)."
+        return _handle_add_shopping(data, user)
 
-    if intent == "get_city_info":
-        city = data.get("city")
-        if not city:
-            return "I couldn't tell which city you meant."
+    if intent == "list_shopping" or (intent == "summarize" and "shopping" in task):
+        return _handle_list_shopping(user)
 
-        try:
-            city_info = fetch_city_info(city)
-        except Exception:
-            return "I couldn't fetch city information right now."
+    if intent == "list_reminders" or (intent == "summarize" and "reminder" in task):
+        return _handle_list_reminders(user)
 
-        return _format_city_info_response(city_info, data.get("city_field"))
+    if intent == "open_tab":
+        return _handle_open_tab(data)
 
-    if intent in ["summarize", "list_shopping"] and "shopping" in task:
-        items = user.shopping_items.all()
-        if items.exists():
-            return "Your shopping list: " + ", ".join(
-                [f"{item.item_name} ({item.quantity})" for item in items]
-            )
-        return "Your shopping list is empty."
+    if intent == "play_youtube":
+        return _handle_play_youtube(data)
 
-    if intent in ["summarize", "list_reminders"] and "reminder" in task:
-        reminders = user.reminders.all()
-        if reminders.exists():
-            return "Your reminders: " + ", ".join(
-                [
-                    f"{reminder.task} at {reminder.date_time.strftime('%Y-%m-%d %H:%M')}"
-                    for reminder in reminders
-                ]
-            )
-        return "You have no reminders."
+    if intent == "search_web":
+        return _handle_search_web(data)
+
+    if intent == "switch_tab":
+        return _handle_switch_tab(data)
+
+    if intent == "close_tab":
+        return _handle_close_tab(data)
+
+    if intent == "list_tabs":
+        return _plan("Here are your open tabs.", [{"type": "list_tabs"}])
+
+    if intent == "summarize_page":
+        return _plan("Let me read this page for you.", [{"type": "summarize_page"}])
+
+    if intent == "get_time":
+        return _handle_get_time()
+
+    if intent == "get_news":
+        return _handle_get_news(data)
 
     if intent == "unknown":
-        return small_chatbot_response(transcript)
+        return _plan(small_chatbot_response(transcript or ""))
 
-    return "Sorry, I didn't understand that command."
+    return _plan("Sorry, I didn't understand that command.")

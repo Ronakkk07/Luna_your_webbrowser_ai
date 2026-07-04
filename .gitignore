@@ -4,3 +4,7 @@
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
 venv/
+
+# Luna extension: large offline speech assets (regenerate with scripts/build_vosk_vendor.py)
+extension/vendor/
+extension/models/
