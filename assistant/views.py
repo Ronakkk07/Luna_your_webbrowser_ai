@@ -18,6 +18,7 @@ from .tasks import process_voice_command_task
 def _run_command(text, user):
     """Shared pipeline: text -> intent -> action plan."""
     intent_data = analyze_intent(text)
+    intent_data["_text"] = text  # preserve the raw utterance for Q&A
     plan = route_intent(intent_data, user)
     return {
         "transcript": text,

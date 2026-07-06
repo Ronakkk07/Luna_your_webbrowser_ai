@@ -1,0 +1,6 @@
+{
+  "baseUrl": "http://127.0.0.1:8000",
+  "username": "your-django-username",
+  "password": "your-django-password",
+  "userName": "Your Name"
+}

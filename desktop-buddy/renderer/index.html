@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Luna</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="stage">
+    <!-- Speech bubble / dialog, anchored above the character -->
+    <div id="bubble" class="hidden">
+      <p id="bubbleText"></p>
+      <div id="bubbleButtons" class="hidden">
+        <button id="yesBtn" class="pill">Yes</button>
+        <button id="noBtn" class="pill ghost">No</button>
+      </div>
+    </div>
+
+    <!-- The character -->
+    <div id="buddy" data-state="offstage">
+      <div id="listenDot" class="hidden"></div>
+      <img id="sprite" src="../assets/Front.png" alt="Luna" draggable="false" />
+      <div id="shadow"></div>
+    </div>
+  </div>
+
+  <script src="../vendor/vosk.js"></script>
+  <script src="voice.js"></script>
+  <script src="buddy.js"></script>
+</body>
+</html>

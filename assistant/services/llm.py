@@ -26,7 +26,7 @@ Command:
 Return ONLY valid JSON in this exact shape:
 
 {{
-  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | switch_tab | close_tab | list_tabs | summarize_page | get_time | get_news | unknown",
+  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | switch_tab | close_tab | list_tabs | summarize_page | get_time | get_news | answer_question | unknown",
   "task": "string or null",
   "datetime": "string or null",
   "items": ["item1", "item2"],
@@ -42,7 +42,13 @@ Guidance:
 - "play_youtube": user wants to WATCH or PLAY something on YouTube (e.g. "open youtube
   and play lofi beats", "play the latest MKBHD video", "watch <song> on youtube"). Put
   the full thing to search/play (channel, title, keywords) in "query".
-- "search_web": user wants to search the web / look something up. Put the search terms in "query".
+- "answer_question": user asks an informational question or wants an explanation,
+  fact, definition, advice, calculation, or general knowledge you can answer
+  DIRECTLY (e.g. "what is quantum computing", "who is Ada Lovelace", "how do I
+  center a div", "why is the sky blue", "explain X"). Prefer this over search_web —
+  only use search_web when the user explicitly wants to open a browser search or
+  see results/links. Put the user's full question in "query".
+- "search_web": user explicitly wants to search the web / open results in the browser. Put the search terms in "query".
 - "switch_tab": user wants to move to an already-open tab. Put a describing word (e.g.
   "gmail", "the youtube tab") in "tab_hint".
 - "close_tab": user wants to close a tab. Put its description in "tab_hint", or null for the current tab.
@@ -101,6 +107,76 @@ Return only the assistant's text, no JSON.
     except Exception as e:
         print("Error generating casual response:", e)
         return "Sorry, I didn't understand that command."
+
+
+def answer_question(text: str) -> str:
+    """Answer a general/informational question directly, spoken-friendly."""
+    question = (text or "").strip()
+    if not question:
+        return "What would you like to know?"
+    prompt = f"""
+You are Luna, a friendly, knowledgeable voice assistant. Answer the user's
+question or request directly, as if speaking it aloud.
+
+Rules:
+- Be accurate and genuinely informative — actually answer, don't deflect.
+- Keep it concise and conversational: usually 1-4 sentences. Expand only if the
+  question truly needs it.
+- Plain spoken text only — no markdown, headings, bullet points, or links.
+- If you're unsure or it needs live/real-time data you don't have, say so briefly
+  and offer to look it up.
+
+User: "{question}"
+
+Answer:
+"""
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print("Error answering question:", e)
+        return "Sorry, I couldn't work that out right now."
+
+
+def news_briefing(headlines, query=None) -> str:
+    """Synthesize a short spoken news briefing from credible headlines.
+
+    ``headlines`` is a list of {'title', 'source', ...} dicts (from Google News,
+    which aggregates established outlets). Gemini turns them into a flowing
+    2-4 sentence briefing rather than a raw list, and names notable sources.
+    """
+    if not headlines:
+        topic = f" about {query}" if query else ""
+        return f"I couldn't find any news{topic} right now."
+
+    lines = "\n".join(
+        f"- {h.get('title')} ({h.get('source') or 'unknown'})" for h in headlines
+    )
+    topic = f" about {query}" if query else " today"
+    prompt = f"""
+You are Luna, a voice assistant giving a spoken news update. Using ONLY the
+credible headlines below (from Google News, which aggregates established
+outlets), write a concise, natural spoken briefing of the main news{topic}.
+
+Rules:
+- 2 to 4 sentences, flowing prose a person can listen to — NOT a bulleted list.
+- Synthesize the main themes; group related stories.
+- Mention a couple of notable outlets by name for credibility.
+- Do not invent facts beyond the headlines. If they're thin, say so briefly.
+
+Headlines:
+{lines}
+
+Return only the spoken briefing text.
+"""
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print("Error building news briefing:", e)
+        # Fall back to a plain read-out of the titles.
+        titles = "; ".join(h.get("title", "") for h in headlines[:4])
+        return f"Here's what's in the news: {titles}."
 
 
 def summarize_page_text(text: str, title: str = "") -> str:

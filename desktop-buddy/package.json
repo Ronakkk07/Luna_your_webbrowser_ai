@@ -1,0 +1,38 @@
+{
+  "name": "luna-desktop-buddy",
+  "version": "0.1.0",
+  "description": "Luna — a desktop companion who walks into your screen when you call, runs your command, and sits with you.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "Ronak",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.ronak.luna.buddy",
+    "productName": "Luna",
+    "asar": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "assets/**",
+      "vendor/**",
+      "models/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

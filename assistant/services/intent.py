@@ -129,6 +129,12 @@ def detect_intent(text):
             result["datetime"] = dt.group(1).strip()
         return result
 
+    # --- general question → answer directly ---
+    if re.match(r"^(what|who|when|where|why|how|which|is |are |can |could |does |do |explain|tell me|define)\b", t):
+        result["intent"] = "answer_question"
+        result["query"] = text
+        return result
+
     # --- shopping ---
     if "shopping" in t and ("add" in t or "buy" in t):
         result["intent"] = "add_shopping"

@@ -1,0 +1,151 @@
+/* Transparent overlay — the desktop shows through everything except the buddy. */
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: system-ui, "Segoe UI", sans-serif;
+  cursor: default;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* clicks pass through; JS enables only over the buddy */
+}
+
+/* ---------------- The character ---------------- */
+#buddy {
+  position: fixed;
+  bottom: 0;
+  right: -320px;               /* start further off-screen for a longer walk */
+  width: 150px;
+  height: auto;
+  pointer-events: auto;        /* the sprite itself is clickable */
+  /* Constant (linear) pace so it reads as walking, not sliding in. Duration is
+     kept in sync with WALK_MS in buddy.js. */
+  transition: right 4s linear,
+              transform 0.5s ease, opacity 0.7s ease;
+  transform-origin: bottom center;
+  will-change: right, transform;
+}
+
+#sprite {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;  /* keep the pixel-art crisp */
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
+}
+
+/* Soft contact shadow so he reads as standing on the floor */
+#shadow {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  width: 70%;
+  height: 14px;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.35), transparent 70%);
+  z-index: -1;
+}
+
+/* States -------------------------------------------------- */
+#buddy[data-state="offstage"] { right: -320px; opacity: 0; }
+#buddy[data-state="entering"],
+#buddy[data-state="listening"],
+#buddy[data-state="idle"] { right: 32px; opacity: 1; }
+#buddy[data-state="leaving"] { right: -320px; opacity: 0.9; }
+
+/* Walking bob (applied to the sprite while moving) — a slower, springier step. */
+#buddy.walking #sprite { animation: bob 0.52s ease-in-out infinite; }
+@keyframes bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-7px) rotate(-1.6deg); }
+  75% { transform: translateY(-7px) rotate(1.6deg); }
+}
+
+/* Gentle idle breathing */
+#buddy[data-state="idle"] #sprite,
+#buddy[data-state="listening"] #sprite {
+  animation: breathe 3.2s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.012); }
+}
+
+/* Seated — real sitting sprite. It draws its own ground, so hide our shadow,
+   and give it a touch more width since the sitting pose is wider than tall. */
+#buddy.seated { width: 172px; }
+#buddy.seated #shadow { display: none; }
+#buddy.seated #sprite { filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3)); }
+
+/* Listening indicator dot */
+#listenDot {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #6c8cff;
+  box-shadow: 0 0 10px #6c8cff;
+  animation: pulse 1s infinite;
+}
+@keyframes pulse {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: 1; }
+  50% { transform: translateX(-50%) scale(1.5); opacity: 0.5; }
+}
+
+/* ---------------- Speech bubble / dialog ---------------- */
+#bubble {
+  position: fixed;
+  bottom: 300px;
+  right: 40px;
+  max-width: 260px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #1a1f36;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  transform-origin: bottom right;
+  animation: pop 0.18s ease;
+  font-size: 14px;
+  line-height: 1.4;
+}
+#bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -9px;
+  right: 26px;
+  border: 9px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.97);
+  border-bottom: 0;
+}
+@keyframes pop {
+  from { transform: scale(0.7); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+#bubbleButtons { display: flex; gap: 8px; margin-top: 10px; }
+.pill {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  background: linear-gradient(135deg, #6c8cff, #a06cff);
+  color: #fff;
+}
+.pill.ghost { background: #e7e9f3; color: #4a5178; }
+.pill:hover { filter: brightness(1.05); }
+
+.hidden { display: none !important; }

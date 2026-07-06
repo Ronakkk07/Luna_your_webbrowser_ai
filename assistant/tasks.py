@@ -15,6 +15,7 @@ def process_voice_command_task(audio_path, user_id):
     try:
         transcript = transcribe_audio_path(audio_path)
         intent_data = analyze_intent(transcript)
+        intent_data["_text"] = transcript  # preserve the raw utterance for Q&A
         plan = route_intent(intent_data, user)
         return {
             "transcript": transcript,

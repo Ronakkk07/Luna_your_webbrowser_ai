@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 import os
 from pathlib import Path
-import requests
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -32,31 +31,10 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-7$y7%dqk8gm)_lv02l+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-<<<<<<< HEAD
-ALLOWED_HOSTS = ["31ada3e8611d4e04b2dcd8532c5c4c6b.vfs.cloud9.us-east-1.amazonaws.com",
-    "lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
-    "localhost",
-    "127.0.0.1",
-    ".elasticbeanstalk.com",
-    '172.31.15.203',
-    '.compute.internal',
-    ]
-try:
-    EC2_IP = requests.get(
-        'http://169.254.169.254/latest/meta-data/local-ipv4',
-        timeout=0.5
-    ).text
-    ALLOWED_HOSTS.append(EC2_IP)
-except Exception:
-    pass
-import ssl
-=======
 ALLOWED_HOSTS = os.getenv(
     "DJANGO_ALLOWED_HOSTS",
     "localhost,127.0.0.1",
 ).split(",")
-
->>>>>>> 381fc78a (able to use mic when the panel is off, and testing done on extension)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -88,41 +66,11 @@ STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "frontend" / "static",]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Create an SSL context that accepts AWS TLS without verification (for dev)
-REDIS_SSL_CONTEXT = ssl.create_default_context()
-REDIS_SSL_CONTEXT.check_hostname = False
-REDIS_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
-_redis_base_url = os.getenv(
-    "CELERY_BROKER_URL",
-    "rediss://lunaredis-dnl0wr.serverless.use1.cache.amazonaws.com:6379"
-)
-
-# Append ssl_cert_reqs=CERT_NONE to satisfy the rediss:// URL validator
-def _add_ssl_param(url: str) -> str:
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}ssl_cert_reqs=CERT_NONE"
-CELERY_BROKER_URL = _add_ssl_param(os.getenv("CELERY_BROKER_URL", "rediss://lunaredis-dnl0wr.serverless.use1.cache.amazonaws.com:6379"))
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
-
-CELERY_RESULT_BACKEND = 'django-db'
-CELERY_CACHE_BACKEND = 'django-cache'
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "django-db")
 CELERY_TASK_TRACK_STARTED = True
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'is_cluster': True,
-    'retry_on_timeout': True,
-    'ssl': {
-        'ssl_cert_reqs': ssl.CERT_NONE,
-        'ssl_context': REDIS_SSL_CONTEXT,
-    }
-}
-CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
-    'is_cluster': True,
-    'ssl': {
-        'backend_use_ssl': ssl.CERT_NONE,
-        'ssl_context': REDIS_SSL_CONTEXT,
-    }
-}
 CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "300"))
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
 CELERY_TASK_STORE_EAGER_RESULT = env_bool("CELERY_TASK_STORE_EAGER_RESULT", False)
@@ -136,12 +84,7 @@ NEWS_RSS_URL = os.getenv(
     "NEWS_RSS_URL",
     "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
 )
-<<<<<<< HEAD
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_TASK_TRACK_STARTED = True
 CELERY_RESULT_EXTENDED = True
-=======
 NEWS_TOP_RSS_URL = os.getenv(
     "NEWS_TOP_RSS_URL",
     "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
@@ -149,8 +92,6 @@ NEWS_TOP_RSS_URL = os.getenv(
 
 # Timezone used when the assistant reports the current time to the user.
 ASSISTANT_TIMEZONE = os.getenv("ASSISTANT_TIMEZONE", "UTC")
-
->>>>>>> 381fc78a (able to use mic when the panel is off, and testing done on extension)
 CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 

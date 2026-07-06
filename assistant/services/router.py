@@ -24,8 +24,9 @@ try:  # zoneinfo is stdlib on py3.9+
 except ImportError:  # pragma: no cover
     ZoneInfo = None
 
-from assistant.services.llm import small_chatbot_response
+from assistant.services.llm import answer_question, news_briefing, small_chatbot_response
 from assistant.services.news import NewsLookupError, fetch_headlines, summarize_headlines
+from assistant.services.youtube import first_video_url, search_url as youtube_search_url
 from reminders.tasks import build_reminder_datetime, create_reminder_for_user
 from shopping.tasks import add_shopping_items_for_user
 
@@ -96,10 +97,21 @@ def _handle_play_youtube(data):
             "Opening YouTube.",
             [{"type": "open_tab", "url": "https://www.youtube.com"}],
         )
-    url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+
+    # Resolve the top result server-side so the video actually plays (a /watch
+    # URL) rather than dumping the user on a search page.
+    watch_url = first_video_url(query)
+    if watch_url:
+        return _plan(
+            f"Playing {query} on YouTube.",
+            [{"type": "open_tab", "url": watch_url}],
+        )
+
+    # Couldn't resolve: fall back to a search. The browser extension's
+    # youtube_play action will still try to click the first result.
     return _plan(
-        f"Playing {query} on YouTube.",
-        [{"type": "youtube_play", "query": query, "url": url}],
+        f"Here are the top YouTube results for {query}.",
+        [{"type": "youtube_play", "query": query, "url": youtube_search_url(query)}],
     )
 
 
@@ -140,10 +152,11 @@ def _handle_get_time():
 def _handle_get_news(data):
     query = (data.get("query") or "").strip() or None
     try:
-        headlines = fetch_headlines(query=query, limit=5)
+        headlines = fetch_headlines(query=query, limit=8)
     except NewsLookupError:
         return _plan("I couldn't reach the news service right now.")
-    return _plan(summarize_headlines(headlines, query=query))
+    # Synthesize a credible spoken briefing rather than reading raw headlines.
+    return _plan(news_briefing(headlines, query=query))
 
 
 def route_intent(data, user):
@@ -191,7 +204,10 @@ def route_intent(data, user):
     if intent == "get_news":
         return _handle_get_news(data)
 
+    if intent == "answer_question":
+        return _plan(answer_question(data.get("_text") or data.get("query") or transcript or ""))
+
     if intent == "unknown":
-        return _plan(small_chatbot_response(transcript or ""))
+        return _plan(small_chatbot_response(data.get("_text") or transcript or ""))
 
     return _plan("Sorry, I didn't understand that command.")
