@@ -13,10 +13,14 @@ def process_voice_command_task(audio_path, user_id):
     user = get_user_model().objects.get(pk=user_id)
 
     try:
+        from assistant.services import memory
+
         transcript = transcribe_audio_path(audio_path)
-        intent_data = analyze_intent(transcript)
+        intent_data = analyze_intent(transcript, user_id=user.id)
         intent_data["_text"] = transcript  # preserve the raw utterance for Q&A
         plan = route_intent(intent_data, user)
+        memory.add_turn(user.id, "user", transcript)
+        memory.add_turn(user.id, "assistant", plan.get("speak", ""))
         return {
             "transcript": transcript,
             "intent": intent_data,

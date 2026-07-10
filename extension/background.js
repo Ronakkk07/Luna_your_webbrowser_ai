@@ -147,12 +147,58 @@ async function authFetch(path, options = {}) {
 }
 
 // ------------------------------------------------------------------ commands
+const STOP_PHRASES = [
+  "stop", "stop it", "stop talking", "shut up", "be quiet", "quiet",
+  "that's enough", "thats enough", "enough", "stop please", "please stop", "cancel",
+];
+function isStopPhrase(text) {
+  return STOP_PHRASES.includes((text || "").toLowerCase().replace(/[.!?]+$/, "").trim());
+}
+
+// Wake-word audio (from the offscreen listener) → Whisper transcript → command.
+const WAKE_PREFIXES = ["hey luna", "ok luna", "okay luna", "luna"];
+function stripWakeFront(text) {
+  const t = (text || "").trim();
+  const low = t.toLowerCase();
+  for (const w of WAKE_PREFIXES) {
+    if (low.startsWith(w)) return t.slice(w.length).replace(/^[\s,.:!?]+/, "").trim();
+  }
+  return t;
+}
+
+async function transcribeAndRun(base64Wav) {
+  const { access } = await getTokens();
+  if (!access) { status("Please log in first."); return; }
+  status("Transcribing…");
+  try {
+    const bytes = Uint8Array.from(atob(base64Wav), (c) => c.charCodeAt(0));
+    const form = new FormData();
+    form.append("audio_file", new Blob([bytes], { type: "audio/wav" }), "command.wav");
+    const resp = await authFetch("/api/assistant/transcribe/", { method: "POST", body: form });
+    if (resp.status === 401) { status("Session expired. Please log in again."); return; }
+    const data = await resp.json();
+    const text = stripWakeFront(data.transcript || "");
+    if (!text) { status('Say "Luna" then your command.'); speak("Yes?"); return; }
+    await runCommand(text, { fromVoice: true });
+  } catch (err) {
+    console.error("transcribe failed:", err);
+    status("I couldn't transcribe that.");
+  }
+}
+
 async function runCommand(text, { fromVoice = false } = {}) {
   const clean = (text || "").trim();
   if (!clean) return;
 
   // Barge-in: a fresh voice command cuts off whatever Luna is saying.
   if (fromVoice) stopSpeaking();
+
+  // "Luna, stop it" — just go quiet. Don't call the brain or say anything new.
+  if (isStopPhrase(clean)) {
+    stopSpeaking();
+    status("Okay — stopped.");
+    return;
+  }
 
   const { access } = await getTokens();
   if (!access) {
@@ -246,28 +292,44 @@ async function actSearchWeb(a) {
   return null;
 }
 
-// Open a YouTube search and best-effort click the first video to auto-play it.
+// Open YouTube and make it actually PLAY: on a /watch page press play; on a
+// search page click the first result (which SPA-navigates to a watch page, then
+// the same script keeps polling and presses play there).
 async function actYoutubePlay(a) {
   const tab = await chrome.tabs.create({ url: a.url });
-  const clickFirst = () => {
+
+  const ensurePlay = () => {
     let tries = 0;
+    let clickedResult = false;
     const timer = setInterval(() => {
-      const link = document.querySelector(
-        "ytd-video-renderer a#video-title, a#video-title-link, ytd-video-renderer a#thumbnail"
-      );
-      if (link) {
-        clearInterval(timer);
-        link.click();
-      } else if (++tries > 40) {
-        clearInterval(timer);
+      tries++;
+      const video = document.querySelector("video");
+      if (video && video.readyState > 0) {
+        if (video.paused) {
+          const p = video.play();
+          if (p && p.catch) {
+            p.catch(() => {
+              const btn = document.querySelector(".ytp-large-play-button, .ytp-play-button");
+              if (btn) btn.click();
+            });
+          }
+        }
+        if (!video.paused) { clearInterval(timer); return; }
+      } else if (!clickedResult) {
+        const link = document.querySelector(
+          "ytd-video-renderer a#video-title, a#video-title-link, a#video-title, ytd-video-renderer a#thumbnail"
+        );
+        if (link) { clickedResult = true; link.click(); }
       }
+      if (tries > 60) clearInterval(timer); // give up after ~15s
     }, 250);
   };
+
   const listener = (tabId, info) => {
     if (tabId === tab.id && info.status === "complete") {
       chrome.tabs.onUpdated.removeListener(listener);
       chrome.scripting
-        .executeScript({ target: { tabId: tab.id }, func: clickFirst })
+        .executeScript({ target: { tabId: tab.id }, func: ensurePlay })
         .catch(() => {});
     }
   };
@@ -336,6 +398,65 @@ async function actSummarizePage() {
   }
 }
 
+// --- page Q&A: read a tab's text and let the backend answer a question about it ---
+async function readTabText(tabId) {
+  const [{ result } = {}] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => ({ title: document.title, text: (document.body && document.body.innerText) || "" }),
+  });
+  return result || { title: "", text: "" };
+}
+
+async function answerFromPage(question, text, title) {
+  try {
+    const resp = await authFetch("/api/assistant/answer-page/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, text, title }),
+    });
+    if (resp.status === 401) return "Your session expired. Please log in again.";
+    const data = await resp.json();
+    return data.speak || "I couldn't find that on the page.";
+  } catch (_) {
+    return "I couldn't reach the server to read that page.";
+  }
+}
+
+// "What does this page say / tell me the odds on this page" → read the active tab.
+async function actReadPage(a) {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || !active.id) return "I don't see a page to read.";
+  let page;
+  try {
+    page = await readTabText(active.id);
+  } catch (_) {
+    return "I can't read this page (it may be a protected browser page).";
+  }
+  if (!page.text.trim()) return "There's no readable text on this page.";
+  return answerFromPage(a.question, page.text, page.title);
+}
+
+// "Open polymarket and tell me the odds for X" → open, wait, read, answer.
+async function actOpenAndAnswer(a) {
+  const tab = await chrome.tabs.create({ url: a.url });
+  await new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); } };
+    const listener = (id, info) => { if (id === tab.id && info.status === "complete") finish(); };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(finish, 9000); // don't wait forever
+  });
+  await new Promise((r) => setTimeout(r, 2500)); // let SPA content render
+  let page;
+  try {
+    page = await readTabText(tab.id);
+  } catch (_) {
+    return "I opened it, but couldn't read the page.";
+  }
+  if (!page.text.trim()) return "I opened it, but there was no readable text yet.";
+  return answerFromPage(a.question, page.text, page.title);
+}
+
 const HANDLERS = {
   open_tab: actOpenTab,
   search_web: actSearchWeb,
@@ -344,6 +465,8 @@ const HANDLERS = {
   close_tab: actCloseTab,
   list_tabs: actListTabs,
   summarize_page: actSummarizePage,
+  read_page: actReadPage,
+  open_and_answer: actOpenAndAnswer,
 };
 
 async function executeActions(actions) {
@@ -384,6 +507,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ---- from the offscreen listener ----
       case "voiceCommand":
         await runCommand(message.text, { fromVoice: true });
+        break;
+      case "audioCommand":
+        await transcribeAndRun(message.wav);
         break;
       case "wakeOnly":
         stopSpeaking();

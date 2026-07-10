@@ -29,16 +29,25 @@ def env_bool(name, default=False):
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-7$y7%dqk8gm)_lv02l+qkmp^dpbv-=q5r9(z)slf&94ubfw7b=")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool("DJANGO_DEBUG", True)
 
-ALLOWED_HOSTS = os.getenv(
-    "DJANGO_ALLOWED_HOSTS",
-    "localhost,127.0.0.1",
-).split(",")
+ALLOWED_HOSTS = [
+    h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()
+]
+# Render sets this automatically to the service's public hostname.
+_render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+if _render_host:
+    ALLOWED_HOSTS.append(_render_host)
+
 from dotenv import load_dotenv
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Free Hugging Face LLM for casual conversation / light tasks, so Gemini calls
+# are conserved for complex work. Get a free token at huggingface.co/settings/tokens.
+HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
+HF_MODEL = os.getenv("HF_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
 # Application definition
 
@@ -65,6 +74,10 @@ MEDIA_URL = "/media/"
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "frontend" / "static",]
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_ACCEPT_CONTENT = ['json']
@@ -92,6 +105,13 @@ NEWS_TOP_RSS_URL = os.getenv(
 
 # Timezone used when the assistant reports the current time to the user.
 ASSISTANT_TIMEZONE = os.getenv("ASSISTANT_TIMEZONE", "UTC")
+
+# Whisper model for command transcription. "base.en" is a good accuracy/speed
+# balance on CPU; "small.en" is more accurate but ~2x slower.
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")
+# Whisper needs ~1GB+ RAM; disable on small hosts (the extension's mic button
+# still gives accurate speech-to-text client-side via the Web Speech API).
+ENABLE_WHISPER = env_bool("ENABLE_WHISPER", True)
 CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 
@@ -106,6 +126,7 @@ AUTH_USER_MODEL = 'users.User'
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -114,11 +135,21 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# The extension calls from a chrome-extension:// origin (dynamic), so allow all
+# origins for the API. Auth is via JWT Bearer tokens, not cookies.
 CORS_ALLOW_ALL_ORIGINS = True
 CSRF_TRUSTED_ORIGINS = [
-    "https://lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
-    "http://lunaenv.eba-2d2e2juu.us-east-1.elasticbeanstalk.com",
+    o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
 ]
+if _render_host:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{_render_host}")
+
+# Behind Render's TLS-terminating proxy.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
 ROOT_URLCONF = 'luna_backend.urls'
 
 TEMPLATES = [
@@ -154,11 +185,14 @@ WSGI_APPLICATION = 'luna_backend.wsgi.application'
 #     }
 # }
 
+import dj_database_url
+
+# Uses DATABASE_URL when set (Render Postgres); falls back to local sqlite.
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / "db.sqlite3",
-    }
+    "default": dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=600,
+    )
 }
 
 

@@ -1,0 +1,49 @@
+# Render Blueprint for the Luna backend (the "brain").
+# In Render: New + → Blueprint → point at this repo. Then set the `sync: false`
+# secrets in the dashboard.
+databases:
+  - name: luna-db
+    plan: free
+
+services:
+  - type: web
+    name: luna-backend
+    runtime: python
+    plan: starter            # Whisper needs more RAM; see ENABLE_WHISPER below
+    buildCommand: "bash ./build.sh"
+    startCommand: "gunicorn luna_backend.wsgi:application"
+    healthCheckPath: /admin/login/
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: luna-db
+          property: connectionString
+      # --- secrets: set these in the Render dashboard (not committed) ---
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: HF_API_TOKEN
+        sync: false
+      # First login for the extension (used once by build.sh to create the user)
+      - key: DJANGO_SUPERUSER_USERNAME
+        sync: false
+      - key: DJANGO_SUPERUSER_EMAIL
+        sync: false
+      - key: DJANGO_SUPERUSER_PASSWORD
+        sync: false
+      # --- behavior ---
+      # Whisper (server STT) needs ~1GB+ RAM — off by default so it fits Starter.
+      # The extension mic button still does accurate STT client-side. To enable
+      # hands-free server transcription, use a >=2GB plan and set this to true.
+      - key: ENABLE_WHISPER
+        value: "false"
+      # No Redis/worker in this blueprint, so run Celery tasks inline.
+      - key: CELERY_TASK_ALWAYS_EAGER
+        value: "true"
+      - key: HF_MODEL
+        value: "Qwen/Qwen2.5-7B-Instruct"

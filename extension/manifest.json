@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Luna Browser Assistant",
+  "name": "Luna — Voice Assistant",
   "version": "0.1.0",
-  "description": "Alexa-like voice assistant that lives in your browser: reminders, news, time, and hands-free tab control.",
+  "description": "A hands-free voice companion: ask questions, get news & the time, set reminders, control tabs, play YouTube, and summarize pages.",
+  "minimum_chrome_version": "116",
   "permissions": ["tabs", "scripting", "storage", "sidePanel", "search", "offscreen", "tts"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {

@@ -117,3 +117,5 @@ wcwidth==0.2.14
 websockets==15.0.1
 wrapt==2.1.2
 yarl==1.22.0
+whitenoise==6.8.2
+dj-database-url==2.3.0

@@ -25,6 +25,16 @@ KNOWN_SITES = {
 }
 
 
+_CASUAL_RE = re.compile(
+    r"^(hi|hello|hey|yo|sup|hiya|how are you|how are u|how're you|how'?s it going|"
+    r"how are we|what'?s up|whats up|good (morning|afternoon|evening|night)( luna)?|"
+    r"thanks|thank you|thank u|thx|cool|nice|awesome|okay|ok|k|lol|haha|hehe|"
+    r"nvm|never ?mind|i love you|love you|miss you|you'?re (funny|great|awesome|the best|sweet)|"
+    r"tell me a joke|tell me a story|say something|are you there|you there|"
+    r"good (job|girl|boy)|well done|bye|goodbye|see you|good night)\b"
+)
+
+
 def _blank():
     return {
         "intent": "unknown",
@@ -46,9 +56,37 @@ def detect_intent(text):
     if not t:
         return result
 
+    # --- casual / small talk → handled by the free chat model (stays "unknown"),
+    # checked before the question rule so "how are you" isn't treated as a query.
+    if _CASUAL_RE.match(t):
+        return result  # intent stays "unknown" -> casual_chat
+
     # --- time ---
     if re.search(r"\b(what('| i)?s )?the time\b|\bwhat time\b|\bcurrent time\b|\bwhat('| i)?s the date\b", t):
         result["intent"] = "get_time"
+        return result
+
+    # --- open a site AND ask about it: "open polymarket and tell me the odds..."
+    m = re.match(r"^(?:open|go to|navigate to|launch)\s+(.+?)\s+and\s+(.+)$", t)
+    if m and re.search(r"\b(tell|what|whats|what's|give|find|check|show|how|is|are|does)\b", m.group(2)):
+        target = m.group(1).strip()
+        result["intent"] = "open_and_answer"
+        result["query"] = text  # full utterance; the page-answer LLM uses it
+        for name, url in KNOWN_SITES.items():
+            if name in target:
+                result["url"] = url
+                break
+        if not result["url"]:
+            if re.match(r"^[\w.-]+\.\w{2,}$", target):
+                result["url"] = "https://" + target
+            else:
+                result["url"] = "https://" + re.sub(r"\s+", "", target) + ".com"
+        return result
+
+    # --- question about the page the user is looking at ---
+    if re.search(r"\b(this page|this site|current page|current tab|on (the |this )?(page|site|screen|tab)|what does (it|this) say|read (this|it))\b", t):
+        result["intent"] = "ask_page"
+        result["query"] = text
         return result
 
     # --- news ---
@@ -127,6 +165,23 @@ def detect_intent(text):
         dt = re.search(r"\b(in\s+\d+\s+\w+|at\s+[\w:.\s]+)$", t)
         if dt:
             result["datetime"] = dt.group(1).strip()
+        return result
+
+    # --- live web research: current/real-time info Gemini can't know ---
+    explicit = re.search(r"\b(search (the )?web|look it up|look up|find out|google|research)\b", t)
+    live = re.search(
+        r"\b(latest|current|currently|today|tonight|right now|this week|this season|"
+        r"upcoming|recent|recently|live|scores?|standings?|lineups?|line-?ups?|fixtures?|"
+        r"results?|who won|who is winning|who'?s winning|price of|stock|share price|odds|"
+        r"betting|weather|forecast|trending|nowadays|as of now|this year)\b",
+        t,
+    )
+    if explicit or live:
+        result["intent"] = "web_research"
+        q = t
+        if explicit:
+            q = re.sub(r"^.*?\b(search (the )?web (for )?|look (it )?up|find out|google|research)\b", "", q).strip()
+        result["query"] = q or text
         return result
 
     # --- general question → answer directly ---

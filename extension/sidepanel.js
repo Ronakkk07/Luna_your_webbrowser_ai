@@ -12,6 +12,7 @@ const els = {
   settingsToggle: $("settingsToggle"),
   settings: $("settings"),
   baseUrl: $("baseUrl"),
+  userName: $("userName"),
   voiceSelect: $("voiceSelect"),
   voiceRate: $("voiceRate"),
   voicePitch: $("voicePitch"),
@@ -75,9 +76,10 @@ function loadVoices() {
 }
 
 async function loadSettings() {
-  const cfg = await chrome.storage.local.get(["baseUrl", "voiceRate", "voicePitch"]);
+  const cfg = await chrome.storage.local.get(["baseUrl", "voiceRate", "voicePitch", "displayName"]);
   baseUrl = cfg.baseUrl || DEFAULT_BASE_URL;
   els.baseUrl.value = baseUrl;
+  els.userName.value = cfg.displayName || "";
   els.voiceRate.value = typeof cfg.voiceRate === "number" ? cfg.voiceRate : 1.0;
   els.voicePitch.value = typeof cfg.voicePitch === "number" ? cfg.voicePitch : 0.9;
   els.rateVal.textContent = els.voiceRate.value;
@@ -115,32 +117,42 @@ function stripWakeWord(text) {
   return null;
 }
 
-let onceRec = null;
-function listenOnce() {
+// Tap to start, tap again to stop — so you can speak a full sentence (with
+// pauses) and it won't cut you off mid-thought.
+let dictation = null;
+let dictationText = "";
+function toggleMic() {
   if (!Recognition) { setStatus("Manual mic needs Chrome/Edge; use Always listen instead."); return; }
-  if (onceRec) return;
-  onceRec = new Recognition();
-  onceRec.lang = "en-US";
-  onceRec.continuous = false;
-  onceRec.interimResults = false;
+  if (dictation) { try { dictation.stop(); } catch (_) {} return; } // second tap → finish
+
+  dictation = new Recognition();
+  dictation.lang = "en-US";
+  dictation.continuous = true;       // keep going through pauses
+  dictation.interimResults = true;
+  dictationText = "";
 
   els.micBtn.classList.add("recording");
   els.orb.classList.add("listening");
-  setStatus("Listening…");
+  setStatus("Listening… tap the mic again when you're done.");
 
-  onceRec.onresult = (event) => {
-    const transcript = event.results[0][0].transcript || "";
-    const stripped = stripWakeWord(transcript);
-    const text = (stripped !== null ? stripped : transcript).trim();
-    if (text) toBg("runCommand", { text, fromVoice: true });
+  dictation.onresult = (event) => {
+    let finalText = "";
+    for (let i = 0; i < event.results.length; i++) {
+      if (event.results[i].isFinal) finalText += event.results[i][0].transcript + " ";
+    }
+    if (finalText.trim()) dictationText = finalText.trim();
   };
-  onceRec.onerror = () => setStatus("I didn't catch that. Try again.");
-  onceRec.onend = () => {
-    onceRec = null;
+  dictation.onerror = () => {};
+  dictation.onend = () => {
     els.micBtn.classList.remove("recording");
     els.orb.classList.remove("listening");
+    const stripped = stripWakeWord(dictationText);
+    const text = (stripped !== null ? stripped : dictationText).trim();
+    dictation = null;
+    if (text) toBg("runCommand", { text, fromVoice: true });
+    else setStatus("I didn't catch that. Try again.");
   };
-  try { onceRec.start(); } catch (_) { onceRec = null; }
+  try { dictation.start(); } catch (_) { dictation = null; }
 }
 
 // --------------------------- login ---------------------------
@@ -157,10 +169,9 @@ async function login() {
     });
     const data = await resp.json();
     if (data.access && data.refresh) {
-      const displayName = username.charAt(0).toUpperCase() + username.slice(1);
-      await chrome.storage.local.set({
-        jwtAccess: data.access, jwtRefresh: data.refresh, displayName,
-      });
+      // Don't derive the greeting name from the login username (that's the
+      // assistant's account, not you). The name comes from ⚙ Settings → Your name.
+      await chrome.storage.local.set({ jwtAccess: data.access, jwtRefresh: data.refresh });
       els.loginStatus.textContent = "";
       els.password.value = "";
       showLoggedIn(true);
@@ -214,10 +225,14 @@ async function persistVoice() {
 
 els.saveSettings.onclick = async () => {
   baseUrl = (els.baseUrl.value.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
-  await chrome.storage.local.set({ baseUrl });
+  const name = els.userName.value.trim();
+  await chrome.storage.local.set({ baseUrl, userSetName: Boolean(name) });
+  if (name) await chrome.storage.local.set({ displayName: name });
+  else await chrome.storage.local.remove("displayName");
   await persistVoice();
   els.settings.classList.add("hidden");
   setStatus("Settings saved.");
+  if (name) toBg("greet"); // re-greet so you hear the corrected name immediately
 };
 
 els.testVoice.onclick = async () => {
@@ -229,7 +244,8 @@ els.loginBtn.onclick = login;
 els.password.addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
 
 els.micBtn.onclick = async () => {
-  if (await ensureMicPermission()) listenOnce();
+  if (dictation) { toggleMic(); return; }        // second tap stops (no perm re-check)
+  if (await ensureMicPermission()) toggleMic();
 };
 
 // Always listen -> headless offscreen Vosk daemon.

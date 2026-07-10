@@ -22,6 +22,10 @@
       <input id="baseUrl" type="text" placeholder="http://127.0.0.1:8000" />
     </label>
     <label class="field">
+      <span>Your name (for greetings)</span>
+      <input id="userName" type="text" placeholder="e.g. Ronak" />
+    </label>
+    <label class="field">
       <span>Voice</span>
       <select id="voiceSelect"></select>
     </label>
@@ -43,7 +47,7 @@
   <section id="loginPanel" class="panel">
     <label class="field">
       <span>Username</span>
-      <input id="username" type="text" autocomplete="username" />
+      <input id="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
     </label>
     <label class="field">
       <span>Password</span>

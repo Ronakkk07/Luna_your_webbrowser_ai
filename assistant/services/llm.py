@@ -2,6 +2,10 @@ import google.generativeai as genai
 from django.conf import settings
 import json
 import os
+import re
+
+from assistant.services import memory
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -15,18 +19,58 @@ def _fallback_intent(text):
     return detect_intent(text)
 
 
-def analyze_intent(text):
+# Intents whose *understanding* benefits from Gemini (they extract structured
+# fields). Everything else is resolved by the local keyword detector, so obvious
+# tasks and casual talk never spend a Gemini call.
+_GEMINI_REFINE_INTENTS = {"create_reminder", "add_shopping"}
+
+# References to earlier turns ("open those resources", "read the first one").
+_FOLLOWUP_RE = re.compile(
+    r"\b(that|those|these|them|it|this one|the ones|the same|again|more|"
+    r"the resources?|the links?|the sources?|the articles?|the videos?|"
+    r"the first one|the second one|the last one|there)\b"
+)
+
+
+def analyze_intent(text, user_id=None):
+    """Local-first intent detection, with context for follow-ups.
+
+    The deterministic keyword detector handles obvious commands, questions, and
+    casual talk with no API call. Gemini is used only when there's real value:
+    extraction-heavy intents, or a follow-up that references earlier turns.
+    """
+    local = _fallback_intent(text)  # detect_intent()
+    history = memory.history_text(user_id) if user_id is not None else ""
+
+    # A follow-up ("open those resources") must be resolved against the recent
+    # conversation, so let Gemini interpret it with that context.
+    if history and _FOLLOWUP_RE.search((text or "").lower()):
+        return _gemini_analyze_intent(text, fallback=local, history=history)
+
+    if local.get("intent") in _GEMINI_REFINE_INTENTS:
+        return _gemini_analyze_intent(text, fallback=local, history=history)
+    return local
+
+
+def _gemini_analyze_intent(text, fallback=None, history=""):
+    context_block = ""
+    if history:
+        context_block = f"""
+Recent conversation (for context — resolve references like "it/that/those/the
+resources" using this, and put the concrete thing into the fields):
+{history}
+"""
     prompt = f"""
 You are Luna, an intelligent browser voice assistant (like Alexa, but living in the
 browser). Extract a structured intent from the user's spoken command below.
-
+{context_block}
 Command:
 "{text}"
 
 Return ONLY valid JSON in this exact shape:
 
 {{
-  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | switch_tab | close_tab | list_tabs | summarize_page | get_time | get_news | answer_question | unknown",
+  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | web_research | ask_page | open_and_answer | switch_tab | close_tab | list_tabs | summarize_page | get_time | get_news | answer_question | unknown",
   "task": "string or null",
   "datetime": "string or null",
   "items": ["item1", "item2"],
@@ -63,12 +107,15 @@ Guidance:
 No explanations. Only JSON.
 """
 
+    if fallback is None:
+        fallback = _fallback_intent(text)
+
     try:
         response = model.generate_content(prompt)
         raw = response.text.strip()
     except Exception as e:  # network / API failure
         print("Gemini analyze_intent error:", e)
-        return _fallback_intent(text)
+        return fallback
 
     # Remove markdown wrapping if present
     cleaned = raw.replace("```json", "").replace("```", "").strip()
@@ -77,17 +124,36 @@ No explanations. Only JSON.
         data = json.loads(cleaned)
     except Exception:
         print("Gemini raw output:", raw)  # Debug
-        return _fallback_intent(text)
+        return fallback
 
     # Normalise so downstream code can rely on the keys existing.
-    fallback = _fallback_intent(text)
     for key, default in fallback.items():
         data.setdefault(key, default)
     return data
 
+def casual_chat(transcript: str, history: str = "") -> str:
+    """Casual conversation / small talk — answered by the free Hugging Face model
+    to conserve Gemini, with Gemini as the fallback if HF isn't configured."""
+    from assistant.services.hf import hf_chat
+
+    system = (
+        "You are Luna, a warm, witty AI companion and friend. Reply to casual "
+        "conversation naturally and briefly, like a supportive friend would — "
+        "1 to 3 sentences, plain spoken text, no markdown or lists. If asked to do "
+        "something you can't, say so kindly. Use the conversation so far for context."
+    )
+    user = transcript
+    if history:
+        user = f"Conversation so far:\n{history}\n\nUser now says: {transcript}"
+    reply = hf_chat(system, user, max_tokens=160, temperature=0.8)
+    if reply:
+        return reply
+    return small_chatbot_response(transcript)  # Gemini fallback
+
+
 def small_chatbot_response(transcript: str) -> str:
     """
-    Handle casual conversation for unknown intents.
+    Handle casual conversation for unknown intents (Gemini fallback for casual_chat).
     Returns a friendly response.
     """
     prompt = f"""
@@ -109,22 +175,27 @@ Return only the assistant's text, no JSON.
         return "Sorry, I didn't understand that command."
 
 
-def answer_question(text: str) -> str:
+def answer_question(text: str, history: str = "") -> str:
     """Answer a general/informational question directly, spoken-friendly."""
     question = (text or "").strip()
     if not question:
         return "What would you like to know?"
+    context_block = f"\nConversation so far (for context):\n{history}\n" if history else ""
     prompt = f"""
-You are Luna, a friendly, knowledgeable voice assistant. Answer the user's
-question or request directly, as if speaking it aloud.
+You are Luna — a knowledgeable, warm AI companion talking with a close friend.
+Answer the user's question or request thoroughly, the way a smart friend would
+explain something they know well, out loud.
+{context_block}
 
 Rules:
-- Be accurate and genuinely informative — actually answer, don't deflect.
-- Keep it concise and conversational: usually 1-4 sentences. Expand only if the
-  question truly needs it.
+- Be genuinely informative and give real detail: cover the key points, add useful
+  context or an example, and explain the "why", not just a one-liner.
+- Aim for about 3 to 6 spoken sentences — enough to actually satisfy the question,
+  but still natural to listen to. Go longer only if the topic truly needs it.
+- Warm, conversational, friendly tone — like a friend, not a textbook.
 - Plain spoken text only — no markdown, headings, bullet points, or links.
-- If you're unsure or it needs live/real-time data you don't have, say so briefly
-  and offer to look it up.
+- If it needs live/real-time data you don't have, say so briefly and offer to
+  look it up.
 
 User: "{question}"
 
@@ -136,6 +207,79 @@ Answer:
     except Exception as e:
         print("Error answering question:", e)
         return "Sorry, I couldn't work that out right now."
+
+
+def research_answer(query: str, sources, history: str = "") -> str:
+    """Answer a live question using web/news sources, spoken-friendly with citations."""
+    if not sources:
+        return f"I looked, but couldn't find anything current about {query} right now."
+    context_block = f"\nConversation so far (for context):\n{history}\n" if history else ""
+
+    blocks = []
+    for s in sources:
+        block = f"[{s.get('source') or 'source'}] {s.get('title', '')}"
+        if s.get("excerpt"):
+            block += f"\n{s['excerpt'][:900]}"
+        blocks.append(block)
+    context = "\n\n".join(blocks)
+
+    prompt = f"""
+You are Luna, a companion who just looked something up on the web for a friend.
+{context_block}
+The user asked: "{query}"
+
+Using the recent results below (from credible outlets), answer their question out
+loud with the ACTUAL information — names, numbers, dates, results. Be specific.
+
+Rules:
+- 2 to 5 natural spoken sentences. No markdown or lists.
+- Mention a source or two by name (e.g. "according to ESPN").
+- If the results don't clearly contain the answer, say what you did find and that
+  details are still limited — don't make things up.
+
+Results:
+{context}
+
+Spoken answer:
+"""
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print("Error in research_answer:", e)
+        titles = "; ".join(s.get("title", "") for s in sources[:3])
+        return f"Here's what I found: {titles}."
+
+
+def answer_about_page(page_text: str, question: str, title: str = "") -> str:
+    """Answer a question using the text of a web page the user is looking at."""
+    snippet = (page_text or "").strip()
+    if not snippet:
+        return "There's no readable text on this page for me to check."
+    snippet = snippet[:14000]
+    heading = f'Page title: "{title}"\n' if title else ""
+    prompt = f"""
+You are Luna. The user is looking at a web page and asked: "{question}"
+
+Answer using ONLY the page content below. Pull out the specific details they want
+(numbers, odds, names, prices, etc.). If the answer isn't on the page, say you
+couldn't find it there.
+
+Rules: 2 to 5 spoken sentences, plain text, no markdown.
+
+{heading}Page content:
+\"\"\"
+{snippet}
+\"\"\"
+
+Spoken answer:
+"""
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print("Error in answer_about_page:", e)
+        return "Sorry, I couldn't read that page just now."
 
 
 def news_briefing(headlines, query=None) -> str:

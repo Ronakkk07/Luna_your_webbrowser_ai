@@ -8,3 +8,6 @@ venv/
 # Luna extension: large offline speech assets (regenerate with scripts/build_vosk_vendor.py)
 extension/vendor/
 extension/models/
+
+dist/
+staticfiles/

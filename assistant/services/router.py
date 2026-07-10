@@ -24,7 +24,13 @@ try:  # zoneinfo is stdlib on py3.9+
 except ImportError:  # pragma: no cover
     ZoneInfo = None
 
-from assistant.services.llm import answer_question, news_briefing, small_chatbot_response
+from assistant.services.llm import (
+    answer_about_page,
+    answer_question,
+    casual_chat,
+    news_briefing,
+    research_answer,
+)
 from assistant.services.news import NewsLookupError, fetch_headlines, summarize_headlines
 from assistant.services.youtube import first_video_url, search_url as youtube_search_url
 from reminders.tasks import build_reminder_datetime, create_reminder_for_user
@@ -98,20 +104,18 @@ def _handle_play_youtube(data):
             [{"type": "open_tab", "url": "https://www.youtube.com"}],
         )
 
-    # Resolve the top result server-side so the video actually plays (a /watch
-    # URL) rather than dumping the user on a search page.
+    # Resolve the top result server-side so we can open the actual /watch page.
+    # Either way we return a `youtube_play` action; the extension opens the URL
+    # and injects a script to press play (or click the first result on a search).
     watch_url = first_video_url(query)
     if watch_url:
         return _plan(
             f"Playing {query} on YouTube.",
-            [{"type": "open_tab", "url": watch_url}],
+            [{"type": "youtube_play", "query": query, "url": watch_url, "kind": "watch"}],
         )
-
-    # Couldn't resolve: fall back to a search. The browser extension's
-    # youtube_play action will still try to click the first result.
     return _plan(
-        f"Here are the top YouTube results for {query}.",
-        [{"type": "youtube_play", "query": query, "url": youtube_search_url(query)}],
+        f"Playing the top result for {query} on YouTube.",
+        [{"type": "youtube_play", "query": query, "url": youtube_search_url(query), "kind": "search"}],
     )
 
 
@@ -161,9 +165,12 @@ def _handle_get_news(data):
 
 def route_intent(data, user):
     """Dispatch a structured intent to a handler, returning an action plan dict."""
+    from assistant.services import memory
+
     intent = data.get("intent")
     task = (data.get("task") or "").lower()
     transcript = data.get("task")
+    history = memory.history_text(getattr(user, "id", None))
 
     if intent == "create_reminder":
         return _handle_create_reminder(data, user)
@@ -204,10 +211,32 @@ def route_intent(data, user):
     if intent == "get_news":
         return _handle_get_news(data)
 
-    if intent == "answer_question":
-        return _plan(answer_question(data.get("_text") or data.get("query") or transcript or ""))
+    if intent == "web_research":
+        query = data.get("query") or data.get("_text") or transcript or ""
+        from assistant.services.web_research import gather
+        return _plan(research_answer(query, gather(query), history=history))
 
-    if intent == "unknown":
-        return _plan(small_chatbot_response(data.get("_text") or transcript or ""))
+    if intent == "ask_page":
+        # The extension reads the current tab and answers the question about it.
+        question = data.get("query") or data.get("_text") or transcript or ""
+        return _plan("", [{"type": "read_page", "question": question}])
+
+    if intent == "open_and_answer":
+        url = (data.get("url") or "").strip()
+        question = data.get("query") or data.get("_text") or transcript or ""
+        if not url:
+            return _plan("Which site should I open?")
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return _plan(
+            "One moment, let me open that and check.",
+            [{"type": "open_and_answer", "url": url, "question": question}],
+        )
+
+    if intent == "answer_question":
+        return _plan(answer_question(data.get("_text") or data.get("query") or transcript or "", history=history))
+
+    if intent in ("unknown", "chitchat"):
+        return _plan(casual_chat(data.get("_text") or transcript or "", history=history))
 
     return _plan("Sorry, I didn't understand that command.")
