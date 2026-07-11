@@ -127,7 +127,11 @@ function stopSpeaking() {
 async function authFetch(path, options = {}) {
   const baseUrl = await getBaseUrl();
   let { access, refresh } = await getTokens();
-  options.headers = { ...(options.headers || {}), Authorization: "Bearer " + access };
+  options.headers = {
+    "ngrok-skip-browser-warning": "true", // skip ngrok free interstitial
+    ...(options.headers || {}),
+    Authorization: "Bearer " + access,
+  };
 
   let resp = await fetch(`${baseUrl}${path}`, options);
   if (resp.status !== 401) return resp;
@@ -135,7 +139,7 @@ async function authFetch(path, options = {}) {
   if (!refresh) return resp;
   const refreshResp = await fetch(`${baseUrl}/api/token/refresh/`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
     body: JSON.stringify({ refresh }),
   });
   const data = await refreshResp.json().catch(() => ({}));

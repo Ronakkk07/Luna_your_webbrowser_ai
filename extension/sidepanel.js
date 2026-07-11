@@ -164,7 +164,7 @@ async function login() {
   try {
     const resp = await fetch(`${baseUrl}/api/token/`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
       body: JSON.stringify({ username, password }),
     });
     const data = await resp.json();
