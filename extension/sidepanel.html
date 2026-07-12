@@ -26,6 +26,17 @@
       <input id="userName" type="text" placeholder="e.g. Ronak" />
     </label>
     <label class="field">
+      <span>Your own AI key <em class="muted">(optional — unlocks unlimited)</em></span>
+      <select id="llmProvider">
+        <option value="gemini">Google Gemini</option>
+        <option value="groq">Groq</option>
+        <option value="openai">OpenAI</option>
+      </select>
+      <input id="apiKey" type="password" placeholder="Paste a key for unlimited; blank = free model" autocomplete="off" spellcheck="false" />
+      <em id="keyStatus" class="muted"></em>
+      <button id="removeKeyBtn" class="btn ghost small hidden" type="button">Remove my key (use free model)</button>
+    </label>
+    <label class="field">
       <span>Voice</span>
       <select id="voiceSelect"></select>
     </label>

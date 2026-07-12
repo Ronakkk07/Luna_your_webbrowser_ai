@@ -45,16 +45,65 @@ ALLOWED_HOSTS = [
 _render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 if _render_host:
     ALLOWED_HOSTS.append(_render_host)
+# Railway exposes the public domain of the service here.
+_railway_host = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+if _railway_host:
+    ALLOWED_HOSTS.append(_railway_host)
+# Allow any Railway subdomain by default too (harmless; hosts still need a valid cert).
+if ".up.railway.app" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(".up.railway.app")
 
 from dotenv import load_dotenv
 
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Free Hugging Face LLM for casual conversation / light tasks, so Gemini calls
-# are conserved for complex work. Get a free token at huggingface.co/settings/tokens.
+# --- LLM providers -------------------------------------------------------- #
+# Cost model (see docs/ROADMAP_SCALE.md): users can bring their own API key
+# (premium), everyone else uses the owner-hosted FREE model. Casual talk always
+# uses the free model. See assistant/services/providers.py.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # owner key: optional free fallback
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
+
+# Free Hugging Face LLM for casual conversation / light tasks.
 HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 HF_MODEL = os.getenv("HF_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+
+# Groq free tier — fast, capable model for keyless users. Optional; if unset the
+# free tier falls back to Hugging Face, then the owner's Gemini.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Let keyless users fall back to the owner's Gemini key. Fine for personal/dev use;
+# set false at scale so the owner isn't billed for every user.
+FREE_LLM_ALLOW_OWNER_GEMINI = env_bool("FREE_LLM_ALLOW_OWNER_GEMINI", True)
+# Daily free-model calls per user. 0 = unlimited (default; enforce by raising it).
+FREE_LLM_DAILY_QUOTA = int(os.getenv("FREE_LLM_DAILY_QUOTA", "0"))
+
+# Agentic tool-loop (assistant/services/agent.py). Off by default: deterministic
+# commands always use the no-LLM fast path; when enabled, reasoning-heavy commands
+# use the multi-step agent (falls back to the classic pipeline on any failure).
+ENABLE_AGENT = env_bool("ENABLE_AGENT", False)
+
+# Key used to encrypt users' BYO API keys at rest. Falls back to SECRET_KEY; set a
+# dedicated value in production and rotate it independently.
+LUNA_ENCRYPTION_KEY = os.getenv("LUNA_ENCRYPTION_KEY", "")
+
+# --- Cache / Redis -------------------------------------------------------- #
+# Redis in production (quota counters, shared conversation memory later); local
+# in-memory cache in dev when REDIS_URL is unset.
+REDIS_URL = os.getenv("REDIS_URL", "")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    }
 
 # Application definition
 
@@ -86,7 +135,7 @@ STORAGES = {
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
 }
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "redis://127.0.0.1:6379/0"
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "django-db")
@@ -150,6 +199,8 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 if _render_host:
     CSRF_TRUSTED_ORIGINS.append(f"https://{_render_host}")
+if _railway_host:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{_railway_host}")
 
 # Behind Render's TLS-terminating proxy.
 if not DEBUG:

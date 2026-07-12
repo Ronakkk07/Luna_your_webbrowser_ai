@@ -1,14 +1,7 @@
-import google.generativeai as genai
-from django.conf import settings
 import json
-import os
 import re
 
-from assistant.services import memory
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-model = genai.GenerativeModel("models/gemini-2.5-flash")
+from assistant.services import memory, providers
 
 
 def _fallback_intent(text):
@@ -43,16 +36,16 @@ def analyze_intent(text, user_id=None):
     history = memory.history_text(user_id) if user_id is not None else ""
 
     # A follow-up ("open those resources") must be resolved against the recent
-    # conversation, so let Gemini interpret it with that context.
+    # conversation, so let the LLM interpret it with that context.
     if history and _FOLLOWUP_RE.search((text or "").lower()):
-        return _gemini_analyze_intent(text, fallback=local, history=history)
+        return _gemini_analyze_intent(text, fallback=local, history=history, user_id=user_id)
 
     if local.get("intent") in _GEMINI_REFINE_INTENTS:
-        return _gemini_analyze_intent(text, fallback=local, history=history)
+        return _gemini_analyze_intent(text, fallback=local, history=history, user_id=user_id)
     return local
 
 
-def _gemini_analyze_intent(text, fallback=None, history=""):
+def _gemini_analyze_intent(text, fallback=None, history="", user_id=None):
     context_block = ""
     if history:
         context_block = f"""
@@ -70,7 +63,7 @@ Command:
 Return ONLY valid JSON in this exact shape:
 
 {{
-  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | web_research | ask_page | open_and_answer | switch_tab | close_tab | list_tabs | summarize_page | get_time | get_news | answer_question | unknown",
+  "intent": "create_reminder | add_shopping | summarize | list_reminders | list_shopping | open_tab | search_web | play_youtube | web_research | ask_page | open_and_answer | switch_tab | close_tab | list_tabs | summarize_page | highlight | find_history | get_time | get_news | answer_question | unknown",
   "task": "string or null",
   "datetime": "string or null",
   "items": ["item1", "item2"],
@@ -98,6 +91,10 @@ Guidance:
 - "close_tab": user wants to close a tab. Put its description in "tab_hint", or null for the current tab.
 - "list_tabs": user asks what tabs are open.
 - "summarize_page": user wants the current page summarized or read.
+- "highlight": user wants something on the CURRENT page highlighted / pointed to / shown
+  (e.g. "highlight the price", "show me where it says refund"). Put the thing to find in "query".
+- "find_history": user wants to find a page from their BROWSING HISTORY by meaning
+  (e.g. "find that article about GPUs I read", "where did I see the recipe"). Put the topic in "query".
 - "get_time": user asks for the current time or date.
 - "get_news": user asks for news/headlines. Put a topic in "query" if they name one, else null.
 - "create_reminder": put the reminder text in "task" and any time phrase in "datetime".
@@ -111,10 +108,11 @@ No explanations. Only JSON.
         fallback = _fallback_intent(text)
 
     try:
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
-    except Exception as e:  # network / API failure
-        print("Gemini analyze_intent error:", e)
+        raw = providers.complete(
+            prompt, user_id=user_id, tier="standard", max_tokens=512, temperature=0.2
+        ).strip()
+    except Exception as e:  # network / API failure / no provider
+        print("LLM analyze_intent error:", e)
         return fallback
 
     # Remove markdown wrapping if present
@@ -131,11 +129,9 @@ No explanations. Only JSON.
         data.setdefault(key, default)
     return data
 
-def casual_chat(transcript: str, history: str = "") -> str:
-    """Casual conversation / small talk — answered by the free Hugging Face model
-    to conserve Gemini, with Gemini as the fallback if HF isn't configured."""
-    from assistant.services.hf import hf_chat
-
+def casual_chat(transcript: str, history: str = "", user_id=None) -> str:
+    """Casual conversation / small talk — always answered by the free model
+    (tier='casual') to conserve everyone's key, whether or not they BYO one."""
     system = (
         "You are Luna, a warm, witty AI companion and friend. Reply to casual "
         "conversation naturally and briefly, like a supportive friend would — "
@@ -145,37 +141,16 @@ def casual_chat(transcript: str, history: str = "") -> str:
     user = transcript
     if history:
         user = f"Conversation so far:\n{history}\n\nUser now says: {transcript}"
-    reply = hf_chat(system, user, max_tokens=160, temperature=0.8)
-    if reply:
-        return reply
-    return small_chatbot_response(transcript)  # Gemini fallback
-
-
-def small_chatbot_response(transcript: str) -> str:
-    """
-    Handle casual conversation for unknown intents (Gemini fallback for casual_chat).
-    Returns a friendly response.
-    """
-    prompt = f"""
-You are a friendly AI assistant.
-Respond naturally and helpfully to the following user message:
-
-User: "{transcript}"
-
-If the message is casual (hello, thank you, how are you, etc.) respond naturally.
-If the message asks a task you cannot do, reply politely that you can't.
-Return only the assistant's text, no JSON.
-"""
-
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.chat(
+            system, user, user_id=user_id, tier="casual", max_tokens=160, temperature=0.8
+        )
     except Exception as e:
-        print("Error generating casual response:", e)
-        return "Sorry, I didn't understand that command."
+        print("casual_chat error:", e)
+        return "Sorry, I didn't quite catch that. Could you say it again?"
 
 
-def answer_question(text: str, history: str = "") -> str:
+def answer_question(text: str, history: str = "", user_id=None) -> str:
     """Answer a general/informational question directly, spoken-friendly."""
     question = (text or "").strip()
     if not question:
@@ -202,14 +177,15 @@ User: "{question}"
 Answer:
 """
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.complete(prompt, user_id=user_id, tier="complex", max_tokens=768)
+    except providers.QuotaExceeded as e:
+        return str(e)
     except Exception as e:
         print("Error answering question:", e)
         return "Sorry, I couldn't work that out right now."
 
 
-def research_answer(query: str, sources, history: str = "") -> str:
+def research_answer(query: str, sources, history: str = "", user_id=None) -> str:
     """Answer a live question using web/news sources, spoken-friendly with citations."""
     if not sources:
         return f"I looked, but couldn't find anything current about {query} right now."
@@ -243,20 +219,26 @@ Results:
 Spoken answer:
 """
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.complete(prompt, user_id=user_id, tier="complex", max_tokens=640)
     except Exception as e:
         print("Error in research_answer:", e)
         titles = "; ".join(s.get("title", "") for s in sources[:3])
         return f"Here's what I found: {titles}."
 
 
-def answer_about_page(page_text: str, question: str, title: str = "") -> str:
-    """Answer a question using the text of a web page the user is looking at."""
-    snippet = (page_text or "").strip()
-    if not snippet:
+def answer_about_page(page_text: str, question: str, title: str = "", user_id=None) -> str:
+    """Answer a question using the text of a web page the user is looking at.
+
+    RAG: retrieve the passages most relevant to the question (retrieval.top_passages)
+    rather than sending the whole page — cheaper and more accurate on long pages.
+    """
+    from assistant.services import retrieval
+
+    if not (page_text or "").strip():
         return "There's no readable text on this page for me to check."
-    snippet = snippet[:14000]
+    snippet = retrieval.top_passages(page_text, question, k=6, max_chars=8000)
+    if not snippet:
+        snippet = (page_text or "").strip()[:8000]
     heading = f'Page title: "{title}"\n' if title else ""
     prompt = f"""
 You are Luna. The user is looking at a web page and asked: "{question}"
@@ -275,14 +257,13 @@ Rules: 2 to 5 spoken sentences, plain text, no markdown.
 Spoken answer:
 """
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.complete(prompt, user_id=user_id, tier="complex", max_tokens=640)
     except Exception as e:
         print("Error in answer_about_page:", e)
         return "Sorry, I couldn't read that page just now."
 
 
-def news_briefing(headlines, query=None) -> str:
+def news_briefing(headlines, query=None, user_id=None) -> str:
     """Synthesize a short spoken news briefing from credible headlines.
 
     ``headlines`` is a list of {'title', 'source', ...} dicts (from Google News,
@@ -314,8 +295,7 @@ Headlines:
 Return only the spoken briefing text.
 """
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.complete(prompt, user_id=user_id, tier="standard", max_tokens=512)
     except Exception as e:
         print("Error building news briefing:", e)
         # Fall back to a plain read-out of the titles.
@@ -323,7 +303,60 @@ Return only the spoken briefing text.
         return f"Here's what's in the news: {titles}."
 
 
-def summarize_page_text(text: str, title: str = "") -> str:
+def rank_history(query: str, items, user_id=None, top_k=5):
+    """Semantically pick the browsing-history items most relevant to ``query``.
+
+    ``items`` is a list of {"title", "url"} (from the extension's chrome.history).
+    Returns {"speak": <spoken summary>, "matches": [{"title","url"}, ...]}. Uses the
+    free model to match by meaning (not just keywords); can be swapped for embeddings
+    later. Falls back to a keyword filter if the model is unavailable.
+    """
+    query = (query or "").strip()
+    items = [it for it in (items or []) if it.get("url")][:80]
+    if not items:
+        return {"speak": "I couldn't find anything in your history for that.", "matches": []}
+
+    numbered = "\n".join(
+        f"{i}. {(it.get('title') or it.get('url'))[:120]} — {it.get('url')[:120]}"
+        for i, it in enumerate(items)
+    )
+    prompt = f"""
+The user is searching their browser history for: "{query}"
+
+Below is a numbered list of recently visited pages. Pick the ones that best match
+what they're looking for BY MEANING (not just exact words). Return ONLY JSON:
+
+{{"indexes": [<the numbers of the best matches, most relevant first, at most {top_k}>],
+  "speak": "<one friendly spoken sentence describing what you found, no markdown>"}}
+
+If nothing fits, return {{"indexes": [], "speak": "<say you couldn't find it>"}}.
+
+Pages:
+{numbered}
+"""
+    try:
+        raw = providers.complete(prompt, user_id=user_id, tier="standard", max_tokens=400, temperature=0.2)
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        data = json.loads(cleaned)
+        idxs = [i for i in data.get("indexes", []) if isinstance(i, int) and 0 <= i < len(items)][:top_k]
+        matches = [{"title": items[i].get("title") or items[i]["url"], "url": items[i]["url"]} for i in idxs]
+        speak = (data.get("speak") or "").strip()
+        if not speak:
+            speak = f"I found {len(matches)} page(s) about {query}." if matches else \
+                    f"I couldn't find anything about {query} in your history."
+        return {"speak": speak, "matches": matches}
+    except Exception as e:
+        print("rank_history error:", e)
+        # Keyword fallback.
+        q = query.lower()
+        hits = [it for it in items if q and (q in (it.get("title") or "").lower() or q in it["url"].lower())][:top_k]
+        matches = [{"title": it.get("title") or it["url"], "url": it["url"]} for it in hits]
+        speak = f"I found {len(matches)} page(s) about {query}." if matches else \
+                f"I couldn't find anything about {query} in your history."
+        return {"speak": speak, "matches": matches}
+
+
+def summarize_page_text(text: str, title: str = "", user_id=None) -> str:
     """Summarize the visible text of a web page into a short spoken summary."""
     snippet = (text or "").strip()
     if not snippet:
@@ -344,8 +377,7 @@ You are Luna, a browser voice assistant. Summarize the web page content below in
 Return only the summary text, no preamble.
 """
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        return providers.complete(prompt, user_id=user_id, tier="complex", max_tokens=512)
     except Exception as e:
         print("Error summarizing page:", e)
         return "Sorry, I couldn't summarize this page right now."

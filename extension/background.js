@@ -215,10 +215,12 @@ async function runCommand(text, { fromVoice = false } = {}) {
 
   let data;
   try {
+    let tz;
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) {}
     const resp = await authFetch("/api/assistant/command/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: clean }),
+      body: JSON.stringify({ text: clean, tz }),
     });
     if (resp.status === 401) {
       status("Session expired. Please log in again.");
@@ -273,6 +275,8 @@ function partOfDay(hour) {
 async function greet() {
   const { access, refresh } = await getTokens();
   if (!access && !refresh) return; // not logged in, stay quiet
+  ensureReminderAlarm(); // start reminder polling once we know we're logged in
+  checkDueReminders();
   const { displayName } = await store("displayName");
   const now = new Date();
   const name = displayName ? ` ${displayName}` : "";
@@ -461,6 +465,123 @@ async function actOpenAndAnswer(a) {
   return answerFromPage(a.question, page.text, page.title);
 }
 
+// "Highlight the multi-cloud text" / "show me where it says refund" → find the text
+// on the current page, mark it yellow, and scroll it into view (like Clicky's pointing).
+// Matching is fuzzy: the query words in sequence, hyphen/space-insensitive, then a
+// single-keyword fallback — so "multi-cloud" matches "multi-cloud", "multi cloud", etc.
+async function actHighlight(a) {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || !active.id) return "I don't see a page to highlight on.";
+  const query = (a.query || "").trim();
+  if (!query) return "What should I highlight?";
+  let found = false;
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: active.id },
+      args: [query],
+      func: (rawNeedle) => {
+        const STOP = new Set([
+          "the", "a", "an", "this", "that", "these", "those", "of", "to", "in", "on",
+          "for", "and", "or", "is", "are", "it", "its", "your", "please", "where",
+          "says", "say", "word", "words", "text", "part", "section", "phrase", "line",
+          "sentence", "bit", "highlight", "show", "me", "anything", "something", "you", "want",
+        ]);
+        const words = rawNeedle
+          .toLowerCase()
+          .replace(/[^\w\s-]/g, " ")
+          .split(/[\s-]+/)
+          .filter((w) => w.length > 1 && !STOP.has(w));
+        if (!words.length) return { found: false };
+
+        const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Try the full phrase (flexible separators) first, then the longest keyword.
+        const patterns = [words.map(esc).join("[\\s\\-]*")];
+        if (words.length > 1) patterns.push(esc([...words].sort((x, y) => y.length - x.length)[0]));
+
+        const markIt = (node, start, end) => {
+          const range = document.createRange();
+          range.setStart(node, start);
+          range.setEnd(node, end);
+          const mark = document.createElement("mark");
+          mark.style.cssText =
+            "background:#ffe14d;color:#000;padding:0 2px;border-radius:2px;" +
+            "box-shadow:0 0 0 3px rgba(255,225,77,.5);";
+          try {
+            range.surroundContents(mark);
+            mark.scrollIntoView({ behavior: "smooth", block: "center" });
+          } catch (_) {
+            if (node.parentElement)
+              node.parentElement.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        };
+
+        for (const pat of patterns) {
+          let re;
+          try {
+            re = new RegExp(pat, "i");
+          } catch (_) {
+            continue;
+          }
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let node;
+          while ((node = walker.nextNode())) {
+            const val = node.nodeValue || "";
+            if (!val.trim()) continue;
+            const parent = node.parentElement;
+            if (!parent || parent.offsetParent === null) continue;
+            const tag = parent.tagName;
+            if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") continue;
+            const m = re.exec(val);
+            if (m) {
+              markIt(node, m.index, m.index + m[0].length);
+              return { found: true, text: m[0] };
+            }
+          }
+        }
+        return { found: false };
+      },
+    });
+    found = Boolean(result && result.found);
+  } catch (_) {
+    return "I can't highlight on this page (it may be a protected browser page).";
+  }
+  return found ? "There it is." : `I couldn't find that on this page.`;
+}
+
+// Semantic history search: gather candidates from chrome.history, let the backend
+// rank them by meaning, speak the result and open the best match.
+async function actFindHistory(a) {
+  const query = (a.query || "").trim();
+  const monthAgo = Date.now() - 1000 * 60 * 60 * 24 * 30;
+  let items = [];
+  try {
+    items = await chrome.history.search({ text: query, maxResults: 100, startTime: monthAgo });
+    if (items.length < 8) {
+      const recent = await chrome.history.search({ text: "", maxResults: 100, startTime: monthAgo });
+      const seen = new Set(items.map((i) => i.url));
+      for (const r of recent) if (!seen.has(r.url)) { items.push(r); seen.add(r.url); }
+    }
+  } catch (_) {
+    return "I couldn't access your browsing history.";
+  }
+  const payload = items.slice(0, 80).map((i) => ({ title: i.title || "", url: i.url }));
+  try {
+    const resp = await authFetch("/api/assistant/find-history/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, items: payload }),
+    });
+    if (resp.status === 401) return "Your session expired. Please log in again.";
+    const data = await resp.json();
+    if (Array.isArray(data.matches) && data.matches.length) {
+      await chrome.tabs.create({ url: data.matches[0].url }); // open the best match
+    }
+    return data.speak || "";
+  } catch (_) {
+    return "I couldn't reach the server to search your history.";
+  }
+}
+
 const HANDLERS = {
   open_tab: actOpenTab,
   search_web: actSearchWeb,
@@ -471,6 +592,8 @@ const HANDLERS = {
   summarize_page: actSummarizePage,
   read_page: actReadPage,
   open_and_answer: actOpenAndAnswer,
+  highlight: actHighlight,
+  find_history: actFindHistory,
 };
 
 async function executeActions(actions) {
@@ -488,16 +611,61 @@ async function executeActions(actions) {
   return extra.join(" ");
 }
 
+// ------------------------------------------------------------------ reminders
+// The backend stores reminders with a due time; we poll /api/reminders/due/ on a
+// chrome.alarms timer (which wakes the service worker) and speak + notify each one
+// as it comes due. This works over the tunnel with no Celery worker running.
+const REMINDER_ALARM = "luna-reminders";
+
+async function checkDueReminders() {
+  const { access } = await getTokens();
+  if (!access) return; // not logged in — nothing to do
+  let due;
+  try {
+    const resp = await authFetch("/api/reminders/due/");
+    if (!resp.ok) return;
+    due = await resp.json();
+  } catch (_) {
+    return;
+  }
+  for (const r of due || []) {
+    const message = `Reminder: ${r.task}`;
+    log("luna", message);
+    speak(message);
+    try {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+        title: "Luna reminder",
+        message: r.task,
+        priority: 2,
+      });
+    } catch (_) {}
+  }
+}
+
+function ensureReminderAlarm() {
+  // Minimum period is 1 minute in MV3, so reminders fire within ~1 min of due time.
+  chrome.alarms.create(REMINDER_ALARM, { periodInMinutes: 1 });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === REMINDER_ALARM) checkDueReminders();
+});
+
 // ------------------------------------------------------------------ lifecycle
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  ensureReminderAlarm();
 });
 
 // On browser start: resume headless listening if it was on, then greet.
 chrome.runtime.onStartup.addListener(async () => {
+  ensureReminderAlarm();
   const { listening } = await store("listening");
   if (listening) await startListening();
   setTimeout(() => greet(), 1500);
+  checkDueReminders(); // catch anything that came due while the browser was closed
 });
 
 // ------------------------------------------------------------------ messages

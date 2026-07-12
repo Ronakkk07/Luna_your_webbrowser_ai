@@ -13,6 +13,10 @@ const els = {
   settings: $("settings"),
   baseUrl: $("baseUrl"),
   userName: $("userName"),
+  llmProvider: $("llmProvider"),
+  apiKey: $("apiKey"),
+  keyStatus: $("keyStatus"),
+  removeKeyBtn: $("removeKeyBtn"),
   voiceSelect: $("voiceSelect"),
   voiceRate: $("voiceRate"),
   voicePitch: $("voicePitch"),
@@ -85,6 +89,64 @@ async function loadSettings() {
   els.rateVal.textContent = els.voiceRate.value;
   els.pitchVal.textContent = els.voicePitch.value;
   loadVoices();
+}
+
+// --------------------------- assistant settings (BYO key) ---------------------------
+async function panelFetch(path, options = {}) {
+  const { jwtAccess } = await chrome.storage.local.get("jwtAccess");
+  return fetch(`${baseUrl}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
+      Authorization: "Bearer " + (jwtAccess || ""),
+      ...(options.headers || {}),
+    },
+  });
+}
+
+function renderKeyStatus(s) {
+  const hasKey = Boolean(s && s.has_key);
+  els.keyStatus.textContent = hasKey
+    ? `✓ Using your own ${s.llm_provider || "AI"} key — unlimited.`
+    : "Using the free model. Add a key for unlimited use.";
+  els.removeKeyBtn.classList.toggle("hidden", !hasKey);
+  if (s && s.llm_provider) els.llmProvider.value = s.llm_provider;
+}
+
+// Pull server-side settings (provider + whether a key is set). The key itself is
+// never returned, so the input stays blank.
+async function loadAssistantSettings() {
+  try {
+    const resp = await panelFetch("/api/assistant/settings/");
+    if (!resp.ok) return;
+    const s = await resp.json();
+    renderKeyStatus(s);
+    if (s.display_name && !els.userName.value) els.userName.value = s.display_name;
+  } catch (_) {}
+}
+
+async function saveAssistantSettings({ apiKey } = {}) {
+  const body = {
+    display_name: els.userName.value.trim(),
+    llm_provider: els.llmProvider.value,
+  };
+  if (typeof apiKey === "string") body.api_key = apiKey; // "" clears, non-empty sets
+  try {
+    const resp = await panelFetch("/api/assistant/settings/", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      renderKeyStatus(await resp.json());
+      els.apiKey.value = "";
+    } else {
+      const err = await resp.json().catch(() => ({}));
+      els.keyStatus.textContent = err.error || "Couldn't save your key.";
+    }
+  } catch (_) {
+    els.keyStatus.textContent = "Couldn't reach the server to save your key.";
+  }
 }
 
 // --------------------------- microphone permission ---------------------------
@@ -176,6 +238,7 @@ async function login() {
       els.password.value = "";
       showLoggedIn(true);
       setStatus("Ready. Turn on Always listen, or tap the mic.");
+      await loadAssistantSettings();
       await ensureMicPermission();
       toBg("greet");
     } else {
@@ -230,10 +293,20 @@ els.saveSettings.onclick = async () => {
   if (name) await chrome.storage.local.set({ displayName: name });
   else await chrome.storage.local.remove("displayName");
   await persistVoice();
+
+  // Persist server-side settings (name, provider, and a BYO key if one was typed).
+  const { jwtAccess } = await chrome.storage.local.get("jwtAccess");
+  if (jwtAccess) {
+    const apiKey = els.apiKey.value.trim();
+    await saveAssistantSettings(apiKey ? { apiKey } : {});
+  }
+
   els.settings.classList.add("hidden");
   setStatus("Settings saved.");
   if (name) toBg("greet"); // re-greet so you hear the corrected name immediately
 };
+
+els.removeKeyBtn.onclick = () => saveAssistantSettings({ apiKey: "" });
 
 els.testVoice.onclick = async () => {
   await persistVoice();
@@ -280,6 +353,7 @@ els.logoutBtn.onclick = async () => {
     const loggedIn = Boolean(state && state.loggedIn);
     showLoggedIn(loggedIn);
     if (loggedIn) {
+      loadAssistantSettings();
       els.wakeToggle.checked = Boolean(state && state.listening);
       setStatus(
         state && state.listening

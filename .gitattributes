@@ -1,0 +1,29 @@
+# Normalize line endings so the repo is consistent regardless of each
+# developer's core.autocrlf setting. Text is stored as LF in the repository.
+* text=auto eol=lf
+
+# Scripts that run on Linux (Railway / Docker) MUST stay LF — CRLF breaks them
+# ("bad interpreter" / stray \r in commands).
+*.sh    text eol=lf
+Dockerfile text eol=lf
+
+# Windows-only scripts stay CRLF.
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.gz    binary
+*.tgz   binary
+*.zip   binary
+*.tar   binary
+*.wav   binary
+*.mp3   binary
+*.onnx  binary
+*.woff  binary
+*.woff2 binary

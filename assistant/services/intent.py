@@ -83,6 +83,38 @@ def detect_intent(text):
                 result["url"] = "https://" + re.sub(r"\s+", "", target) + ".com"
         return result
 
+    # --- highlight / point to something on the current page ---
+    if re.search(r"\bhighlight\b", t) or re.search(r"\bshow me where\b", t):
+        result["intent"] = "highlight"
+        hm = re.search(r"\b(?:highlight|show me where(?: it says)?)\s+(.+)$", t)
+        q = hm.group(1) if hm else text
+        # Drop "... on this/the (open) page/tab", leading articles, and trailing
+        # filler nouns so "the multi-cloud text" -> "multi-cloud".
+        q = re.sub(r"\s+(?:on|in)\s+(?:the\s+|this\s+|current\s+|open\s+|my\s+)*(?:page|screen|site|tab)\b.*$", "", q)
+        q = re.sub(r"^(?:the|a|an|that|this|any|some)\s+", "", q)
+        q = re.sub(r"\s+(?:text|word|words|phrase|part|section|bit|line|sentence)$", "", q)
+        q = q.strip(" .,?!\"'")
+        result["query"] = q or text
+        return result
+
+    # --- semantic browsing-history search ---
+    if (
+        re.search(r"\b(browsing history|browser history|my history|in my history|history for)\b", t)
+        or re.search(r"\bwhere did i (see|read|find)\b", t)
+        or re.search(r"\b(that|the)\s+(article|page|site|website|video|blog|post|recipe|thing)\b.{0,40}?\bi\s+(saw|read|watched|visited|opened|looked at|found)\b", t)
+    ):
+        result["intent"] = "find_history"
+        hm = (
+            re.search(r"\babout\s+(.+)$", t)
+            or re.search(r"\bfor\s+(.+)$", t)
+            or re.search(r"\b(?:see|read|watched|find|visited|opened|looked at)\s+(.+?)(?:\s+in my history|\s+earlier|\s+before|\s+recently|\s+last\b.*)?$", t)
+        )
+        q = hm.group(1).strip(" ?.\"'") if hm else text
+        # Drop a trailing "... i read/saw" so "about gpus i read" -> "gpus".
+        q = re.sub(r"\s+i\s+(saw|read|watched|visited|opened|looked at|found)\b.*$", "", q).strip(" ?.\"'")
+        result["query"] = q or text
+        return result
+
     # --- question about the page the user is looking at ---
     if re.search(r"\b(this page|this site|current page|current tab|on (the |this )?(page|site|screen|tab)|what does (it|this) say|read (this|it))\b", t):
         result["intent"] = "ask_page"
@@ -160,11 +192,21 @@ def detect_intent(text):
     # --- reminders ---
     if "remind" in t:
         result["intent"] = "create_reminder"
-        m = re.search(r"remind me to\s+(.+?)(?:\s+in\s+.+|\s+at\s+.+)?$", t)
-        result["task"] = m.group(1).strip() if m else text
-        dt = re.search(r"\b(in\s+\d+\s+\w+|at\s+[\w:.\s]+)$", t)
+        # Time phrase: "in/after N units", "N units from now", "at 8:30 pm".
+        time_re = (
+            r"(?:in|after)\s+\d+\s+\w+"
+            r"|\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?)(?:\s+from\s+now)?"
+            r"|at\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?"
+        )
+        dt = re.search(time_re, t)
         if dt:
-            result["datetime"] = dt.group(1).strip()
+            result["datetime"] = dt.group(0).strip()
+        # Task = what's left after removing "remind me (to)" and the time phrase.
+        task = re.sub(r"^.*?\bremind\s+(?:me|us)\s+(?:to\s+)?", "", t)
+        task = re.sub(time_re, "", task)
+        task = re.sub(r"^\s*to\s+", "", task)  # leftover "to" when time came first
+        task = task.strip(" ,.")
+        result["task"] = task or text
         return result
 
     # --- live web research: current/real-time info Gemini can't know ---

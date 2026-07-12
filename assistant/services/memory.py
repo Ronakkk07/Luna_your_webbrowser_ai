@@ -1,28 +1,38 @@
-"""Short-term conversation memory (per user).
+"""Short-term conversation memory (per user), backed by the cache.
 
 Keeps the last few turns so follow-up questions and tasks have context —
-e.g. "open those resources" knows what "those" refers to. This is deliberately
-lightweight (in-process); it's conversation context, not a document store / RAG.
+e.g. "open those resources" knows what "those" refers to.
+
+Cache-backed (Redis in production, local-memory in dev) so context is **shared
+across web + worker instances** and survives restarts — an in-process deque would
+be lost on restart and invisible to other instances, breaking horizontal scale.
+This is still lightweight conversation context, not a document store / RAG.
 """
-from collections import defaultdict, deque
-from threading import Lock
+from django.core.cache import cache
 
 _MAX_TURNS = 12  # ~6 exchanges
-_history = defaultdict(lambda: deque(maxlen=_MAX_TURNS))
-_lock = Lock()
+_TTL = 60 * 60 * 24  # forget a conversation after a day of silence
+
+
+def _key(user_id):
+    return f"convmem:{user_id}"
 
 
 def add_turn(user_id, role, text):
     text = (text or "").strip()
-    if not text:
+    if not text or user_id is None:
         return
-    with _lock:
-        _history[user_id].append({"role": role, "text": text})
+    turns = cache.get(_key(user_id)) or []
+    turns.append({"role": role, "text": text})
+    if len(turns) > _MAX_TURNS:
+        turns = turns[-_MAX_TURNS:]
+    cache.set(_key(user_id), turns, _TTL)
 
 
 def get_turns(user_id):
-    with _lock:
-        return list(_history[user_id])
+    if user_id is None:
+        return []
+    return cache.get(_key(user_id)) or []
 
 
 def history_text(user_id, max_turns=8):
@@ -36,5 +46,5 @@ def history_text(user_id, max_turns=8):
 
 
 def clear(user_id):
-    with _lock:
-        _history.pop(user_id, None)
+    if user_id is not None:
+        cache.delete(_key(user_id))

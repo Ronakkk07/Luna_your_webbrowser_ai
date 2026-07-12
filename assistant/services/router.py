@@ -45,14 +45,33 @@ def _search_url(query):
     return f"https://www.google.com/search?q={quote_plus(query)}"
 
 
+def _resolve_tz(tz_name):
+    """The client's IANA zone (e.g. 'Europe/Dublin') if valid, else the configured
+    default, else None."""
+    if ZoneInfo is None:
+        return None
+    for name in (tz_name, settings.ASSISTANT_TIMEZONE):
+        if name:
+            try:
+                return ZoneInfo(name)
+            except Exception:
+                continue
+    return None
+
+
+def _local(dt, tz_name):
+    """Render an aware datetime in the user's local zone for display."""
+    tz = _resolve_tz(tz_name)
+    return timezone.localtime(dt, tz) if tz else dt
+
+
 def _handle_create_reminder(data, user):
+    tz_name = data.get("_tz")
     task_name = data.get("task") or "General reminder"
-    dt = build_reminder_datetime(data.get("datetime"))
+    dt = build_reminder_datetime(data.get("datetime"), tz_name=tz_name)
     reminder = create_reminder_for_user(user=user, task_name=task_name, dt=dt)
-    return _plan(
-        f"Reminder set: {reminder.task} at "
-        f"{reminder.date_time.strftime('%A %I:%M %p')}."
-    )
+    when = _local(reminder.date_time, tz_name)
+    return _plan(f"Reminder set: {reminder.task} at {when.strftime('%A %I:%M %p')}.")
 
 
 def _handle_add_shopping(data, user):
@@ -70,11 +89,12 @@ def _handle_list_shopping(user):
     return _plan("Your shopping list is empty.")
 
 
-def _handle_list_reminders(user):
+def _handle_list_reminders(user, tz_name=None):
     reminders = user.reminders.all()
     if reminders.exists():
         listed = ", ".join(
-            f"{r.task} at {r.date_time.strftime('%A %I:%M %p')}" for r in reminders
+            f"{r.task} at {_local(r.date_time, tz_name).strftime('%A %I:%M %p')}"
+            for r in reminders
         )
         return _plan(f"Your reminders: {listed}.")
     return _plan("You have no reminders.")
@@ -142,25 +162,20 @@ def _handle_close_tab(data):
     return _plan(speak, [{"type": "close_tab", "hint": hint}])
 
 
-def _handle_get_time():
-    tz = None
-    if ZoneInfo is not None:
-        try:
-            tz = ZoneInfo(settings.ASSISTANT_TIMEZONE)
-        except Exception:
-            tz = None
+def _handle_get_time(tz_name=None):
+    tz = _resolve_tz(tz_name)
     now = timezone.localtime(timezone.now(), tz) if tz else timezone.now()
     return _plan(now.strftime("It's %I:%M %p on %A, %B %d.").replace(" 0", " "))
 
 
-def _handle_get_news(data):
+def _handle_get_news(data, user_id=None):
     query = (data.get("query") or "").strip() or None
     try:
         headlines = fetch_headlines(query=query, limit=8)
     except NewsLookupError:
         return _plan("I couldn't reach the news service right now.")
     # Synthesize a credible spoken briefing rather than reading raw headlines.
-    return _plan(news_briefing(headlines, query=query))
+    return _plan(news_briefing(headlines, query=query, user_id=user_id))
 
 
 def route_intent(data, user):
@@ -170,7 +185,9 @@ def route_intent(data, user):
     intent = data.get("intent")
     task = (data.get("task") or "").lower()
     transcript = data.get("task")
-    history = memory.history_text(getattr(user, "id", None))
+    user_id = getattr(user, "id", None)
+    tz_name = data.get("_tz")
+    history = memory.history_text(user_id)
 
     if intent == "create_reminder":
         return _handle_create_reminder(data, user)
@@ -182,7 +199,7 @@ def route_intent(data, user):
         return _handle_list_shopping(user)
 
     if intent == "list_reminders" or (intent == "summarize" and "reminder" in task):
-        return _handle_list_reminders(user)
+        return _handle_list_reminders(user, tz_name)
 
     if intent == "open_tab":
         return _handle_open_tab(data)
@@ -205,16 +222,29 @@ def route_intent(data, user):
     if intent == "summarize_page":
         return _plan("Let me read this page for you.", [{"type": "summarize_page"}])
 
+    if intent == "highlight":
+        query = (data.get("query") or data.get("_text") or transcript or "").strip()
+        if not query:
+            return _plan("What should I highlight on this page?")
+        return _plan("", [{"type": "highlight", "query": query}])
+
+    if intent == "find_history":
+        query = (data.get("query") or data.get("_text") or transcript or "").strip()
+        return _plan(
+            "Let me look through your history.",
+            [{"type": "find_history", "query": query}],
+        )
+
     if intent == "get_time":
-        return _handle_get_time()
+        return _handle_get_time(tz_name)
 
     if intent == "get_news":
-        return _handle_get_news(data)
+        return _handle_get_news(data, user_id=user_id)
 
     if intent == "web_research":
         query = data.get("query") or data.get("_text") or transcript or ""
         from assistant.services.web_research import gather
-        return _plan(research_answer(query, gather(query), history=history))
+        return _plan(research_answer(query, gather(query), history=history, user_id=user_id))
 
     if intent == "ask_page":
         # The extension reads the current tab and answers the question about it.
@@ -234,9 +264,9 @@ def route_intent(data, user):
         )
 
     if intent == "answer_question":
-        return _plan(answer_question(data.get("_text") or data.get("query") or transcript or "", history=history))
+        return _plan(answer_question(data.get("_text") or data.get("query") or transcript or "", history=history, user_id=user_id))
 
     if intent in ("unknown", "chitchat"):
-        return _plan(casual_chat(data.get("_text") or transcript or "", history=history))
+        return _plan(casual_chat(data.get("_text") or transcript or "", history=history, user_id=user_id))
 
     return _plan("Sorry, I didn't understand that command.")

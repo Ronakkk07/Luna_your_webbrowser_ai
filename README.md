@@ -2,16 +2,25 @@
 
 An Alexa/FRIDAY-style voice assistant that lives in your browser. Talk to it
 hands-free to set reminders, hear the news and the time, control your tabs
-(open, search, switch, close, list), play things on YouTube, and summarize the
-current page.
+(open, search, switch, close, list), play things on YouTube, answer questions,
+research the live web, **highlight things on the page**, **find pages from your
+history by meaning**, and answer questions about the current page.
 
 **Design in one line:** the extension is the **ears + hands + voice**; the Django
 backend (`luna_backend`) is the **brain** that turns your speech into an *action
 plan* the extension executes.
 
-> For the full story of how this was built — every architecture decision, the
-> challenges we hit, and why each fix was chosen — see
-> [`../docs/ENGINEERING_JOURNEY.md`](../docs/ENGINEERING_JOURNEY.md).
+**Multi-user ready.** The brain uses a **free model out of the box** (so anyone can
+use it with no setup) and lets each user **bring their own API key** in Settings for
+unlimited, higher-quality answers. You can run it locally behind a tunnel for testing,
+or deploy it to the cloud (Railway) for many users — see
+[docs/ROADMAP_SCALE.md](docs/ROADMAP_SCALE.md) and
+[docs/DEPLOY_RAILWAY.md](docs/DEPLOY_RAILWAY.md).
+
+> Deep dives: the scale/architecture plan is in
+> [docs/ROADMAP_SCALE.md](docs/ROADMAP_SCALE.md), how Luna compares to a fully on-device
+> assistant is in [docs/COMPARISON_GEMMA4.md](docs/COMPARISON_GEMMA4.md), and cloud
+> deployment is in [docs/DEPLOY_RAILWAY.md](docs/DEPLOY_RAILWAY.md).
 
 ---
 
@@ -29,14 +38,24 @@ plan* the extension executes.
   └────────────────────────────────────┼──────────────────────────────────────────┘
                                         │ JSON over HTTPS (JWT)
                                         ▼
-                        ┌───────────────────────────────┐
-                        │  Django backend  (the brain)   │
-                        │  POST /api/assistant/command/  │
-                        │  text ─▶ Gemini intent ─▶      │
-                        │  router ─▶ { speak, actions }  │
-                        │  + reminders / shopping / news │
-                        └───────────────────────────────┘
+                        ┌────────────────────────────────────────────┐
+                        │  Django backend  (the brain)                │
+                        │  POST /api/assistant/command/               │
+                        │  text ─▶ local intent (fast, no LLM)        │
+                        │       └▶ LLM via provider layer:            │
+                        │          • keyless → free model (Groq/HF)   │
+                        │          • BYO key → your Gemini/OpenAI      │
+                        │  router / agent ─▶ { speak, actions }       │
+                        │  + reminders / shopping / news / research   │
+                        │  + RAG page Q&A · semantic history · memory │
+                        └────────────────────────────────────────────┘
 ```
+
+The brain never hardcodes one model: `services/providers.py` routes every LLM call —
+keyless users share a **free** model (subject to a daily quota), users with their own
+key use it (encrypted at rest), and casual chat always uses the free model to conserve
+keys. Conversation **memory** and the quota live in a cache (local in dev, Redis in
+production) so the backend can scale to many instances.
 
 ---
 
@@ -44,14 +63,23 @@ plan* the extension executes.
 
 1. Run the backend:
    ```bash
-   python manage.py migrate
-   python manage.py runserver            # http://127.0.0.1:8000
+   python manage.py migrate               # creates the new UserSettings table too
+   python manage.py runserver             # http://127.0.0.1:8000
    ```
-   (Optional, for scheduled reminders: run Redis + `celery -A luna_backend worker -l info`.)
+   (Optional, for scheduled reminders / async voice: run Redis + `celery -A luna_backend worker -l info`.)
 2. Create a login:
    ```bash
    python manage.py createsuperuser
    ```
+   Environment (`.env`) — the free model works with just an `HF_API_TOKEN`. All optional:
+   | Var | Purpose |
+   |-----|---------|
+   | `HF_API_TOKEN` | Free Hugging Face model (default free tier) |
+   | `GROQ_API_KEY` | Faster/better free tier than HF (used first if set) |
+   | `GEMINI_API_KEY` | Owner Gemini key — final free fallback / your own use |
+   | `LUNA_ENCRYPTION_KEY` | Encrypts users' bring-your-own keys (falls back to `SECRET_KEY`) |
+   | `FREE_LLM_DAILY_QUOTA` | Cap free-model calls per user (`0` = unlimited) |
+   | `ENABLE_AGENT` | `true` to enable the multi-step agent (off = fast single-shot path) |
 3. Fetch the offline speech assets (one-time, ~46 MB, git-ignored):
    ```bash
    python scripts/build_vosk_vendor.py
@@ -81,6 +109,10 @@ plan* the extension executes.
   in London"*, *"what time is it"*, *"give me the news"*, *"list my tabs"*, *"switch
   to the gmail tab"*, *"close this tab"*, *"summarize this page"*, *"remind me to
   call mom in 10 minutes"*, *"add milk and eggs to my shopping list"*.
+- **New tools:** *"what's the refund policy on this page?"* (RAG page Q&A — pulls the
+  relevant part of the page), *"highlight the total price"* (marks it and scrolls to
+  it), *"find that article about GPUs I read"* (semantic search of your history — opens
+  the best match), *"who won the last match?"* (live web research).
 - **Interrupt her:** while Luna is speaking, say `Luna, …` again — she stops and
   takes the new command. Or click **Stop talking**.
 
@@ -105,6 +137,30 @@ plan* the extension executes.
 - The default auto-picks the most FRIDAY-like voice available — a British female
   voice (e.g. *Microsoft Sonia / Hazel* on Windows, *Google UK English Female* in
   Chrome). Edge's online "Natural" voices sound closest to FRIDAY.
+
+## Your own AI key (⚙ Settings)
+
+- Leave the **"Your own AI key"** field blank to use the **free model** (good enough
+  for everyday tasks, subject to a daily limit).
+- Or pick a provider (Gemini / Groq / OpenAI), paste your key, and **Save** for
+  **unlimited, higher-quality** answers. The key is stored **encrypted** on the
+  backend and is never shown again; casual chit-chat still uses the free model to
+  conserve it. Use **Remove my key** to go back to the free model.
+
+---
+
+## Running & deploying the backend
+
+**Local / testing (tunnel — no cloud needed):** run the backend on your PC and expose
+it with a permanent ngrok tunnel, then set the extension's Server URL to the tunnel
+once. `run_luna.bat` starts the backend + tunnel together. See
+[docs/STABLE_URL_NGROK.md](docs/STABLE_URL_NGROK.md). Everything here — the free model,
+BYO keys, new tools, conversation memory — works this way with **no Redis/Postgres**
+(memory falls back to a local cache; Celery is only needed for async voice).
+
+**Multi-user (cloud):** deploy to Railway (web + Celery worker + Postgres + Redis) so
+users don't need your PC on. See [docs/DEPLOY_RAILWAY.md](docs/DEPLOY_RAILWAY.md).
+Rotate any keys that were ever in a local `.env` before deploying publicly.
 
 ---
 
@@ -140,5 +196,10 @@ plan* the extension executes.
 ## Privacy
 
 - Audio is processed **locally** (Vosk WASM). Only the recognized command text —
-  and, for “summarize this page”, the page's visible text — is sent to your own
-  backend. No third-party speech service is used for always-on listening.
+  and, for “summarize this page” / page Q&A, the page's visible text — is sent to
+  your own backend. No third-party speech service is used for always-on listening.
+- **History search** happens on demand only: when you ask Luna to *find* a page, the
+  extension gathers candidate titles/URLs from your browser history and sends them to
+  your backend to rank by meaning; it isn't tracked or stored otherwise.
+- **Bring-your-own API keys** are stored **encrypted** on the backend (Fernet) and are
+  never returned to the client or logged.
